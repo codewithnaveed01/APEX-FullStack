@@ -1,103 +1,98 @@
 package com.apex;
 
 import com.apex.config.AppConfig;
-import com.apex.dao.ApplicationDao;
-import com.apex.dao.BanDao;
-import com.apex.dao.BookingDao;
-import com.apex.dao.CarDao;
-import com.apex.dao.ChatDao;
-import com.apex.dao.DocumentDao;
-import com.apex.dao.DriverDao;
-import com.apex.dao.NotificationDao;
-import com.apex.dao.PaymentDao;
-import com.apex.dao.ReviewDao;
-import com.apex.dao.SessionDao;
-import com.apex.dao.SettingsDao;
-import com.apex.dao.UserDao;
-import com.apex.dao.WalletDao;
 import com.apex.db.Database;
-import com.apex.service.AuthService;
-import com.apex.service.StateService;
-import com.apex.service.StatsService;
-import com.apex.service.WalletService;
-import com.apex.web.ApiRoutes;
+import com.apex.db.Migrate;
+import com.apex.log.Logger;
+import com.apex.web.HttpUtil;
 import com.apex.web.Router;
 import com.apex.web.StaticHandler;
+import com.apex.web.RateLimiter;
+import com.apex.web.controllers.*;
+import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpServer;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.concurrent.Executors;
 
 /**
- * APEX - Driven Beyond Ordinary.
- * Full-stack entry point: SQLite database + REST API + static frontend,
- * all served from one JDK-only process (plus gson & sqlite-jdbc jars).
+ * APEX backend entry point.
+ *
+ * 1. load config (env-driven)
+ * 2. open the PostgreSQL pool (retry for cloud cold starts)
+ * 3. run migrations
+ * 4. seed (admin once, fleet from seed.json when empty)
+ * 5. serve API + frontend on $PORT
  */
-public class Main {
+public final class Main {
 
-    public static void main(String[] args) throws Exception {
-        AppConfig cfg = new AppConfig();
+    public static void main(String[] args) {
+        long t0 = System.currentTimeMillis();
+        Logger.info("APEX backend starting (Java {})...", System.getProperty("java.version"));
 
-        Database db = new Database(cfg);
-        System.out.println("[APEX] Database engine: " + db.engine());
+        AppConfig cfg = AppConfig.load();
+        Logger.info("port={} static={} db={}", cfg.port, cfg.staticDir, cfg.databaseUrl());
 
-        CarDao carDao = new CarDao(db);
-        DriverDao driverDao = new DriverDao(db);
-        UserDao userDao = new UserDao(db);
-        BookingDao bookingDao = new BookingDao(db);
-        ApplicationDao applicationDao = new ApplicationDao(db);
-        NotificationDao notificationDao = new NotificationDao(db);
-        ChatDao chatDao = new ChatDao(db);
-        BanDao banDao = new BanDao(db);
-        WalletDao walletDao = new WalletDao(db);
-        SettingsDao settingsDao = new SettingsDao(db);
-        SessionDao sessionDao = new SessionDao(db);
-        PaymentDao paymentDao = new PaymentDao(db);
-        DocumentDao documentDao = new DocumentDao(db);
-        ReviewDao reviewDao = new ReviewDao(db);
+        Database db = Database.open(new Database.Cfg()
+                .host(cfg.dbHost).port(cfg.dbPort).user(cfg.dbUser)
+                .password(cfg.dbPassword).database(cfg.dbDatabase).ssl(cfg.dbSsl),
+                cfg.dbPoolSize, 30, 2000);
 
-        StateService state = new StateService(db, carDao, driverDao, userDao, bookingDao, applicationDao,
-                notificationDao, chatDao, banDao, walletDao, settingsDao);
-        state.seedIfEmpty(cfg.getSeedFile());
+        Migrate.run(db, Paths.get(cfg.home, "migrations"));
 
-        AuthService auth = new AuthService(db, sessionDao, userDao, cfg);
-        WalletService wallet = new WalletService(db, walletDao);
-        StatsService stats = new StatsService(db, carDao, bookingDao, userDao, walletDao, driverDao,
-                applicationDao, settingsDao, chatDao, notificationDao, paymentDao, documentDao, reviewDao);
+        App app = new App(cfg, db);
+        app.seedService.run();
 
-        Router router = new Router(auth);
-        ApiRoutes.register(router, state, auth, wallet, stats, carDao, bookingDao, paymentDao,
-                documentDao, reviewDao, notificationDao, cfg);
+        Router router = new Router(app.auth, new RateLimiter());
+        new AdminController(app).register(router);
+        new AuthController(app).register(router);
+        new FleetController(app).register(router);
+        new BookingController(app).register(router);
+        new PaymentController(app).register(router);
+        new DocumentController(app).register(router);
+        new ReviewController(app).register(router);
+        new ChatController(app).register(router);
+        new SettingsController(app).register(router);
 
-        HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", cfg.getPort()), 0);
-        final Database dbLock = db;
-        server.createContext("/api/", ex -> {
-            // One shared JDBC connection: serialize ALL database work here so two
-            // requests can never interleave statements or transactions on it.
-            synchronized (dbLock) {
+        StaticHandler statics = new StaticHandler(cfg.staticDir);
+        AdminController admin = new AdminController(app);
+
+        HttpServer server;
+        try {
+            server = HttpServer.create(new InetSocketAddress("0.0.0.0", cfg.port), 128);
+        } catch (IOException e) {
+            Logger.error("Cannot bind port {}: {}", cfg.port, e.getMessage());
+            System.exit(1);
+            return;
+        }
+        server.createContext("/", ex -> {
+            String path = ex.getRequestURI().getPath();
+            if (path.equals("/health")) {
                 try {
-                    if (!router.handle(ex)) {
-                        com.apex.web.HttpUtil.sendError(ex, 404, "No such API route");
-                    }
-                } catch (java.io.IOException ignored) { }
+                    HttpUtil.sendJson(ex, 200, admin.health());
+                } finally {
+                    ex.close();
+                }
+            } else if (path.startsWith("/api/") || path.startsWith("/healthz")) {
+                try {
+                    router.handler().handle(ex);
+                } finally {
+                    ex.close();
+                }
+            } else {
+                try {
+                    statics.serve(ex);
+                } finally {
+                    ex.close();
+                }
             }
         });
-        server.createContext("/", new StaticHandler(cfg.getStaticDir()));
-        server.setExecutor(Executors.newFixedThreadPool(10));
+        server.setExecutor(Executors.newFixedThreadPool(32));
         server.start();
-
-        System.out.println("=====================================================");
-        System.out.println(" APEX full-stack server ready");
-        System.out.println("   URL     : http://localhost:" + cfg.getPort() + "/");
-        System.out.println("   Admin   : http://localhost:" + cfg.getPort() + "/admin.html");
-        System.out.println("   API     : http://localhost:" + cfg.getPort() + "/api/health");
-        String jdbc = cfg.getJdbcUrl();
-        if (jdbc != null) {
-            System.out.println("   Database: MySQL " + jdbc.replaceAll("password=[^&]*", "password=***"));
-        } else {
-            System.out.println("   DB file : " + cfg.getDbFile());
-        }
-        System.out.println("   Static  : " + cfg.getStaticDir());
-        System.out.println("=====================================================");
+        Logger.info("APEX ready in {} ms - http://0.0.0.0:{} (frontend: {})",
+                System.currentTimeMillis() - t0, cfg.port, cfg.staticDir);
     }
 }

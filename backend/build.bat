@@ -1,8 +1,11 @@
+REM APEX backend build (Windows)
 @echo off
-rem Compile the APEX Java backend (requires JDK 11+).
+setlocal
 cd /d "%~dp0"
-if not exist out mkdir out
-dir /s /b src\*.java > sources.txt
-javac -encoding UTF-8 -cp "lib/*" -d out @sources.txt
+if exist out rmdir /s /q out
+mkdir out
+echo Compiling APEX backend...
+for /r src %%f in (*.java) do echo %%~ff > sources.txt
+javac --release 17 -encoding UTF-8 -cp "lib/*" -d out @sources.txt || exit /b 1
 del sources.txt
-echo Build OK -^> backend\out
+echo Build OK

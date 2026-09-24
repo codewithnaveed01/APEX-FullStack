@@ -297,25 +297,6 @@ function submitAuth(e,signup,next){
     closeModal();go(next);render();toast('Welcome, '+u.name.split(' ')[0]+'!');
   }else{
     const identifier=f.username.trim().toLowerCase();
-    if(identifier==='admin' && f.password==='admin1234'){
-      adminSession={user:'admin',at:new Date().toISOString()};
-      adminTab='Payments';
-      account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
-      apexAdminLogin('admin', f.password);
-      persist();
-      closeModal();
-      toast('Admin signed in — opening operations');
-      if(isAdmin){render();return;}
-      if(window.EMBEDDED_PHOTOS){
-        window.ADMIN_MODE=true;isAdmin=true;
-        document.getElementById('app').innerHTML=adminShell();
-        renderNotif();
-        return;
-      }else{
-        location.href='admin.html';
-        return;
-      }
-    }
     const u=users.find(x=>x.username.toLowerCase()===identifier||x.email.toLowerCase()===identifier);
     if(!u)return showErr('No account found with that username or email.');
     if(u.password!==f.password)return showErr('Incorrect password. Try again.');
@@ -343,7 +324,21 @@ function accountPage(){
 }
 function signout(){account=null;store.removeItem('v2_session');go('home');render();toast('Signed out')}
 function cancelOrder(id){const o=orders.find(o=>o.id===id);modal('Cancel booking?',`<p class="small muted">${o.id} will be cancelled.</p><div class="button-row"><button class="btn ghost" onclick="closeModal()">Keep</button><button class="btn" onclick="confirmCancel('${id}')">Cancel</button></div>`)}
-function confirmCancel(id){let o=orders.find(o=>o.id===id);const fee=Math.round(o.totals.rental*0.05);o.cancellationFee=fee;o.status='Cancelled';adminWallet+=fee;apexRecordPayment(fee,'cancellation-fee',id); if(o.paid>0){const refund=o.paid-fee; addNotification(o.userId,'Booking cancelled — 5% fee','Your booking '+id+' cancelled. Fee '+money(fee)+' deducted, refund '+(refund>0?money(refund):money(0)),'account');}else{addNotification(o.userId,'Booking cancelled','Your booking '+id+' cancelled. 5% fee '+money(fee)+' applied.','account');} persist();closeModal();render();toast('Cancelled — 5% fee '+money(fee)+' to admin wallet');}
+async function confirmCancel(id){const o=orders.find(x=>x.id===id);if(!o)return;
+  if(v3Online()){
+    try{
+      const b=await v3Api('/api/bookings/'+encodeURIComponent(id)+'/cancel',{method:'POST',body:JSON.stringify({})});
+      const i=orders.findIndex(x=>x.id===id);if(i>=0)orders[i]=b;
+      persist();closeModal();render();
+      toast('Cancelled — 5% fee '+money(b.cancellationFee||0)+' to admin wallet');
+      v3RefreshBootstrap();
+    }catch(err){toast(err.message||'Cancel failed');}
+    return;
+  }
+  const fee=Math.round(o.totals.rental*0.05);o.cancellationFee=fee;o.status='Cancelled';adminWallet+=fee;
+  if(o.paid>0){const refund=o.paid-fee;addNotification(o.userId,'Booking cancelled — 5% fee','Your booking '+id+' cancelled. Fee '+money(fee)+' deducted, refund '+(refund>0?money(refund):money(0)),'account');}
+  else{addNotification(o.userId,'Booking cancelled','Your booking '+id+' cancelled. 5% fee '+money(fee)+' applied.','account');}
+  persist();closeModal();render();toast('Cancelled — 5% fee '+money(fee)+' to admin wallet');}
 function banCNIC(cnic){if(!cnic) return; if(!bannedCNICs.includes(cnic)){bannedCNICs.push(cnic); persist(); toast('CNIC '+cnic+' banned'); render();}}
 function unbanCNIC(cnic){bannedCNICs=bannedCNICs.filter(x=>x!==cnic); persist(); toast('CNIC '+cnic+' unbanned'); render();}
 function adminManualBooking(){modal('Manual booking — Admin entry for walk-in customer', `<form onsubmit="submitManualBooking(event)"><div class="formgrid"><div class="field"><label>Customer ID (existing or blank for guest)</label><input name="userId" placeholder="Existing user ID or blank"></div><div class="field"><label>Customer full name</label><input name="name" required></div><div class="field"><label>Phone</label><input name="phone" required></div><div class="field"><label>Email</label><input type="email" name="email" required></div><div class="field"><label>CNIC (13 digits)</label><input name="identity" pattern="[0-9]{13}" required placeholder="0000000000000"></div><div class="field"><label>Car ID</label><select name="carId" required>${fleet.map(c=>`<option value="${c.id}">${c.id} — ${esc(c.name)} — ${money(c.rate)}/day</option>`).join('')}</select></div><div class="field"><label>Start date</label><input type="date" name="start" required min="${TODAY}"></div><div class="field"><label>End date</label><input type="date" name="end" required min="${TODAY}"></div><div class="field"><label>City</label><select name="city">${cities('Lahore')}</select></div><div class="field"><label>Service</label><select name="service"><option>Self-drive</option><option>With driver</option></select></div><div class="field"><label>Pickup mode</label><select name="pickupMode"><option>Office pickup</option><option>Home delivery</option></select></div><div class="field"><label>Payment method</label><select name="payment"><option>Cash on pickup</option><option>JazzCash</option><option>easypaisa</option><option>Raast / bank transfer</option></select></div><div class="field"><label>Paid amount (if cash, admin manually adds to wallet)</label><input type="number" name="paid" value="0"></div></div><button class="btn full" style="margin-top:14px">Create manual booking ↗</button></form>`, true);}
@@ -366,19 +361,22 @@ function contact(){modal('Contact APEX',`<form onsubmit="event.preventDefault();
 function modal(title,body,large=false){document.getElementById('overlay').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()"><section class="modal ${large?'large':''}" role="dialog" aria-modal="true"><div class="modal-head"><h2>${title}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</section></div>`;document.body.style.overflow='hidden'}
 function closeModal(){document.getElementById('overlay').innerHTML='';document.body.style.overflow=''}
 function download(name,text,type='text/csv'){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function adminLoginPage(){return `<div class="admin-login-wrap"><div class="panel admin-login depth-layer"><div class="eyebrow">APEX OPERATIONS</div><h1>Admin login</h1><p class="small muted">Username: <b>admin</b> · Password: <b>admin1234</b></p><form onsubmit="submitAdminLogin(event)"><div class="formgrid"><div class="field wide"><label>Username</label><input name="user" required autocomplete="username" value="admin"></div><div class="field wide"><label>Password</label><input name="pass" type="password" required autocomplete="current-password"></div></div><button class="btn full" style="margin-top:14px">Sign in to operations ↗</button></form></div></div>`}
-function submitAdminLogin(e){
+function adminLoginPage(){return `<div class="admin-login-wrap"><div class="panel admin-login depth-layer"><div class="eyebrow">APEX OPERATIONS</div><h1>Admin login</h1><p class="small muted">Server-verified administrator sign-in.</p><form onsubmit="submitAdminLogin(event)"><div class="formgrid"><div class="field wide"><label>Username</label><input name="user" required autocomplete="username" value="admin"></div><div class="field wide"><label>Password</label><input name="pass" type="password" required autocomplete="current-password"></div></div><button class="btn full" style="margin-top:14px">Sign in to operations ↗</button></form></div></div>`}
+async function submitAdminLogin(e){
   e.preventDefault();
   const f=Object.fromEntries(new FormData(e.target));
-  if(f.user==='admin'&&f.pass==='admin1234'){
+  if(!v3Online()){toast('Admin sign-in requires a running server.');return;}
+  try{
+    const d=await v3Api('/api/auth/login',{method:'POST',body:JSON.stringify({username:f.user,password:f.pass})});
+    if(!d||d.role!=='admin'){toast('Invalid credentials.');return;}
+    __apexToken=d.token;write('apiToken',__apexToken);
     adminSession={user:'admin',at:new Date().toISOString()};
     adminTab='Payments';
     account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
-    apexAdminLogin(f.user, f.pass);
-    persist();
-    render();
+    persist();render();
     toast('Admin signed in — website + operations accessible');
-  }else toast('Invalid credentials. Use admin / admin1234');
+    v3RefreshBootstrap();
+  }catch(err){toast(err.message||'Invalid credentials.');}
 }
 function adminLogout(){adminSession=null;store.removeItem('v2_adminSession');if(account && account.id==='admin'){account=null;store.removeItem('v2_session');}apexClearToken();persist();render();toast('Admin signed out')}
 
@@ -731,30 +729,27 @@ async function submitAuth(e,signup,next){
     closeModal();go(next);render();toast('Welcome, '+u.name.split(' ')[0]+'!');
   }else{
     const identifier=f.username.trim().toLowerCase();
-    if(identifier==='admin'&&f.password==='admin1234'){
-      adminSession={user:'admin',at:new Date().toISOString()};adminTab='Overview';
-      account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
-      persist();closeModal();
-      if(isAdmin){render();return;}
-      location.href='admin.html';return;
-    }
     const u=users.find(x=>x.username.toLowerCase()===identifier||x.email.toLowerCase()===identifier);
     if(!u)return showErr('No account found with that username or email.');
     if(u.password!==f.password)return showErr('Incorrect password. Try again.');
     account=u;write('session',u);closeModal();go(next);render();toast('Welcome back, '+u.name.split(' ')[0]+'!');
   }
 }
-function submitAdminLogin(e){
+async function submitAdminLogin(e){
   e.preventDefault();
   const f=Object.fromEntries(new FormData(e.target));
-  if(f.user==='admin'&&f.pass==='admin1234'){
+  if(!v3Online()){toast('Admin sign-in requires a running server.');return;}
+  try{
+    const d=await v3Api('/api/auth/login',{method:'POST',body:JSON.stringify({username:f.user,password:f.pass})});
+    if(!d||d.role!=='admin'){toast('Invalid credentials.');return;}
+    __apexToken=d.token;write('apiToken',__apexToken);
     adminSession={user:'admin',at:new Date().toISOString()};
     adminTab='Overview';
     account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
-    apexAdminLogin(f.user,f.pass);
     persist();render();
     toast('Admin signed in — opening Overview dashboard');
-  }else toast('Invalid credentials. Use admin / admin1234');
+    v3RefreshBootstrap();
+  }catch(err){toast(err.message||'Invalid credentials.');}
 }
 
 /* ---------- sync adapter: pull after login, push only as admin ---------- */

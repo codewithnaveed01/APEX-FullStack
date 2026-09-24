@@ -1,353 +1,354 @@
 package com.apex.service;
 
-import com.apex.dao.ApplicationDao;
-import com.apex.dao.BanDao;
-import com.apex.dao.BookingDao;
-import com.apex.dao.CarDao;
-import com.apex.dao.ChatDao;
-import com.apex.dao.DriverDao;
-import com.apex.dao.NotificationDao;
-import com.apex.dao.SettingsDao;
-import com.apex.dao.UserDao;
-import com.apex.dao.WalletDao;
+import com.apex.dao.*;
 import com.apex.db.Database;
+import com.apex.db.PgConnection;
+import com.apex.db.QueryResult;
+import com.apex.model.*;
 import com.apex.util.Json;
+import com.apex.web.ApiException;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import org.mindrot.jbcrypt.BCrypt;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * The single write-path of the system. The frontend pushes its whole state
- * document here; the service normalises it into the relational tables inside
- * one transaction. Bootstrap does the reverse so any client can hydrate.
+ * Bootstrap (full state for a session) and admin sync (push state).
+ *
+ * Sync rules:
+ *  - fleet + drivers: full replace (the admin UI is the catalog truth)
+ *  - users / orders / applications / notifications / chats: upsert-only,
+ *    NEVER deleted server-side (protects history and other clients)
+ *  - bannedCNICs + config: replace
+ *  - wallet fields: ignored (wallet is server-own)
+ *  - incoming passwords are hashed; stored hashes are never overwritten
  */
-public class StateService {
+public final class StateService {
 
     private final Database db;
-    private final CarDao cars;
-    private final DriverDao drivers;
-    private final UserDao users;
-    private final BookingDao bookings;
-    private final ApplicationDao applications;
-    private final NotificationDao notifications;
-    private final ChatDao chats;
-    private final BanDao bans;
-    private final WalletDao wallet;
-    private final SettingsDao settings;
+    private final CarRepo cars;
+    private final DriverRepo drivers;
+    private final UserRepo users;
+    private final BookingRepo bookings;
+    private final ApplicationRepo apps;
+    private final NotificationRepo notifs;
+    private final ChatRepo chats;
+    private final BanRepo bans;
+    private final SettingsRepo settings;
+    private final WalletRepo wallet;
 
-    public StateService(Database db, CarDao cars, DriverDao drivers, UserDao users, BookingDao bookings,
-                        ApplicationDao applications, NotificationDao notifications, ChatDao chats,
-                        BanDao bans, WalletDao wallet, SettingsDao settings) {
-        this.db = db;
-        this.cars = cars;
-        this.drivers = drivers;
-        this.users = users;
-        this.bookings = bookings;
-        this.applications = applications;
-        this.notifications = notifications;
-        this.chats = chats;
-        this.bans = bans;
-        this.wallet = wallet;
-        this.settings = settings;
+    public StateService(Database db, CarRepo cars, DriverRepo drivers, UserRepo users,
+                        BookingRepo bookings, ApplicationRepo apps, NotificationRepo notifs,
+                        ChatRepo chats, BanRepo bans, SettingsRepo settings, WalletRepo wallet) {
+        this.db = db; this.cars = cars; this.drivers = drivers; this.users = users;
+        this.bookings = bookings; this.apps = apps; this.notifs = notifs;
+        this.chats = chats; this.bans = bans; this.settings = settings; this.wallet = wallet;
     }
 
-    /* ------------------------------------------------ read side */
+    /* ---------------- bootstrap ---------------- */
 
-    /**
-     * Full state for authenticated admins; sanitized state for the public.
-     * Public viewers never see customer CNIC/phone or wallet balances.
-     */
-    public JsonObject bootstrap(JsonObject session) throws SQLException {
-        boolean full = session != null && "admin".equals(Json.str(session, "role"));
-        String me = session == null ? null : Json.str(session, "username");
+    public JsonObject bootstrap(JsonObject session) {
+        boolean admin = session != null && "admin".equals(Json.getStr(session, "role", ""));
+        String userId = session != null ? Json.getStr(session, "userId", "") : "";
         return db.with(c -> {
-            JsonObject s = Json.obj();
-            s.add("fleet", toArray(cars.all()));
-            s.add("drivers", toArray(drivers.all()));
-            if (full) {
-                s.add("users", toArray(users.all()));
-                s.addProperty("adminWallet", wallet.adminBalance());
-                JsonObject ow = Json.obj();
-                wallet.ownerWallets().forEach((k, v) -> ow.addProperty(k, v));
-                s.add("ownerWallets", ow);
-            } else {
-                JsonArray pub = Json.arr();
-                for (JsonObject u : users.all()) {
-                    JsonObject p = Json.obj();
-                    p.addProperty("id", Json.str(u, "id"));
-                    p.addProperty("username", Json.str(u, "username"));
-                    p.addProperty("email", Json.str(u, "email"));
-                    p.addProperty("name", Json.str(u, "name"));
-                    pub.add(p);
+            JsonObject o = new JsonObject();
+            JsonArray fleet = new JsonArray();
+            for (Car car : cars.list(c)) fleet.add(car.toJson());
+            JsonArray drv = new JsonArray();
+            for (Driver d : drivers.list(c)) drv.add(d.toJson());
+            o.add("fleet", fleet);
+            o.add("drivers", drv);
+
+            if (admin) {
+                JsonArray us = new JsonArray();
+                for (User u : users.all(c)) {
+                    JsonObject d = u.data.deepCopy();
+                    d.remove("password");
+                    us.add(d);
                 }
-                s.add("users", pub);
+                o.add("users", us);
+                JsonArray orders = new JsonArray();
+                for (Booking b : bookings.listAll(c)) orders.add(sanitize(b.data, false));
+                o.add("orders", orders);
+                JsonArray aps = new JsonArray();
+                for (Application a : apps.list(c)) aps.add(a.toJson());
+                o.add("applications", aps);
+                JsonArray nf = new JsonArray();
+                for (JsonObject n : notifs.listAll(c)) nf.add(n);
+                o.add("notifications", nf);
+                JsonArray ch = new JsonArray();
+                for (ChatThread t : chats.allThreads(c)) ch.add(t.toJson());
+                o.add("chats", ch);
+                o.add("bannedCNICs", bans.list(c).size() > 0 ? bansArray(c) : new JsonArray());
+                JsonObject aw = new JsonObject();
+                aw.addProperty("balance", wallet.balance(c));
+                o.add("adminWallet", aw);
+                JsonObject ow = new JsonObject();
+                wallet.ownerWallets(c).forEach(ow::addProperty);
+                o.add("ownerWallets", ow);
+            } else {
+                JsonArray us = new JsonArray();
+                for (User u : users.all(c)) us.add(u.publicJson());
+                o.add("users", us);
+                if (userId.isEmpty()) {
+                    o.add("orders", new JsonArray());
+                    o.add("notifications", new JsonArray());
+                    o.add("chats", new JsonArray());
+                    o.add("applications", new JsonArray());
+                } else {
+                    JsonArray orders = new JsonArray();
+                    for (Booking b : bookings.listAll(c)) {
+                        if (b.userId != null && b.userId.equals(userId)) orders.add(sanitize(b.data, true));
+                    }
+                    o.add("orders", orders);
+                    JsonArray nf = new JsonArray();
+                    for (JsonObject n : notifs.listForUser(c, userId)) nf.add(n);
+                    o.add("notifications", nf);
+                    JsonArray ch = new JsonArray();
+                    ch.add(chats.threadFor(c, userId).toJson());
+                    o.add("chats", ch);
+                    JsonArray aps = new JsonArray();
+                    for (Application a : apps.listByUser(c, userId)) aps.add(a.toJson());
+                    o.add("applications", aps);
+                }
+                o.add("bannedCNICs", bans.list(c).size() > 0 ? bansArray(c) : new JsonArray());
+                o.add("adminWallet", new JsonObject());
+                o.add("ownerWallets", new JsonObject());
             }
-            // privacy: non-admins only ever see THEIR OWN orders/notifications/chats,
-            // and identity numbers are stripped from the wire entirely.
-            JsonArray myOrders = Json.arr();
-            for (JsonObject o : bookings.all()) {
-                if (!full && !o.equals(null) && me != null && me.equals(Json.str(o, "userId"))) {
-                    JsonObject copy = Json.parseObject(o.toString());
-                    if (copy.has("identity")) copy.remove("identity");
-                    myOrders.add(copy);
-                } else if (full) myOrders.add(o);
-            }
-            s.add("orders", myOrders);
-            JsonArray myApps = Json.arr();
-            for (JsonObject a : applications.all())
-                if (full || (me != null && me.equals(Json.str(a, "userId")))) myApps.add(a);
-            s.add("applications", myApps);
-            JsonArray myNotifs = Json.arr();
-            for (JsonObject n : notifications.all()) {
-                String to = Json.str(n, "userId");
-                if (full || (me != null && (me.equals(to) || "all".equals(to)))) myNotifs.add(n);
-            }
-            s.add("notifications", myNotifs);
-            JsonArray myChats = Json.arr();
-            for (JsonObject ch : chats.all())
-                if (full || (me != null && me.equals(Json.str(ch, "userId")))) myChats.add(ch);
-            s.add("chats", myChats);
-            JsonArray banned = Json.arr();
-            if (full || session != null) bans.all().forEach(banned::add);
-            s.add("bannedCNICs", banned);
-            String cfg = settings.get("config");
-            s.add("config", cfg != null ? Json.parse(cfg) : Json.obj());
-            return s;
+            o.add("config", settings.getConfig(c));
+            return o;
         });
     }
 
-    public JsonArray collection(String name) throws SQLException {
-        List<JsonObject> rows;
-        switch (name) {
-            case "fleet": rows = cars.all(); break;
-            case "drivers": rows = drivers.all(); break;
-            case "users": rows = users.all(); break;
-            case "orders": rows = bookings.all(); break;
-            case "applications": rows = applications.all(); break;
-            case "notifications": rows = notifications.all(); break;
-            case "chats": rows = chats.all(); break;
-            default: throw new IllegalArgumentException("Unknown collection: " + name);
-        }
-        return toArray(rows);
-    }
-
-    public JsonObject getConfig() throws SQLException {
-        String cfg = settings.get("config");
-        return cfg != null ? Json.parseObject(cfg) : Json.obj();
-    }
-
-    /* ------------------------------------------------ write side */
-
-    public void sync(JsonObject s) throws SQLException {
-        db.tx(c -> {
-            cars.replace(objectList(s, "fleet"));
-            drivers.replace(objectList(s, "drivers"));
-            users.replace(objectList(s, "users"));
-            List<JsonObject> incoming = objectList(s, "orders");
-            checkOverlaps(incoming);
-            bookings.replace(incoming);
-            applications.replace(objectList(s, "applications"));
-            notifications.replace(objectList(s, "notifications"));
-            chats.replace(objectList(s, "chats"));
-            List<String> banned = new ArrayList<>();
-            if (s.has("bannedCNICs") && s.get("bannedCNICs").isJsonArray())
-                s.getAsJsonArray("bannedCNICs").forEach(e -> banned.add(e.getAsString()));
-            bans.replace(banned);
-            if (s.has("adminWallet") && s.get("adminWallet").isJsonPrimitive())
-                wallet.setAdminBalance(s.get("adminWallet").getAsLong());
-            Map<String, Long> ow = new LinkedHashMap<>();
-            if (s.has("ownerWallets") && s.get("ownerWallets").isJsonObject())
-                for (Map.Entry<String, JsonElement> e : s.getAsJsonObject("ownerWallets").entrySet())
-                    ow.put(e.getKey(), e.getValue().getAsLong());
-            wallet.replaceOwnerWallets(ow);
-            if (s.has("config") && s.get("config").isJsonObject())
-                settings.set("config", s.getAsJsonObject("config").toString());
-            return null;
-        });
-    }
-
-    public void setCollection(String name, JsonArray items) throws SQLException {
-        List<JsonObject> list = new ArrayList<>();
-        items.forEach(e -> { if (e.isJsonObject()) list.add(e.getAsJsonObject()); });
-        db.tx(c -> {
-            switch (name) {
-                case "fleet": cars.replace(list); break;
-                case "drivers": drivers.replace(list); break;
-                case "users": users.replace(list); break;
-                case "orders": bookings.replace(list); break;
-                case "applications": applications.replace(list); break;
-                case "notifications": notifications.replace(list); break;
-                case "chats": chats.replace(list); break;
-                default: throw new IllegalArgumentException("Unknown collection: " + name);
-            }
-            return null;
-        });
-    }
-
-    public void setConfig(JsonObject cfg) throws SQLException {
-        db.tx(c -> { settings.set("config", cfg.toString()); return null; });
-    }
-
-    /* ------------------------------------------------ banned CNIC control */
-
-    public JsonArray banned() throws SQLException {
-        JsonArray a = Json.arr();
-        db.with(c -> { bans.all().forEach(a::add); return null; });
+    private JsonArray bansArray(PgConnection c) {
+        JsonArray a = new JsonArray();
+        for (JsonObject b : bans.list(c)) a.add(b);
         return a;
     }
 
-    public void addBan(String cnic) throws SQLException {
-        db.tx(c -> { bans.add(cnic); return null; });
+    /** Strip sensitive fields from an order for non-owners. */
+    private static JsonObject sanitize(JsonObject data, boolean stripIdentity) {
+        JsonObject d = data.deepCopy();
+        if (stripIdentity) d.remove("identity");
+        d.remove("password");
+        return d;
     }
 
-    public void removeBan(String cnic) throws SQLException {
-        db.tx(c -> { bans.remove(cnic); return null; });
+    /* ---------------- sync (admin) ---------------- */
+
+    public JsonObject sync(JsonObject adminSession, JsonObject state) {
+        String reviewer = Json.getStr(adminSession, "username", "admin");
+        int[] counts = new int[8];
+        db.tx(c -> {
+            // 1) fleet (full replace)
+            if (state.has("fleet")) {
+                List<Car> fleet = new ArrayList<>();
+                for (JsonElement el : arr(state, "fleet")) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject d = el.getAsJsonObject();
+                    String idStr = Json.getStr(d, "id", "");
+                    if (idStr.isEmpty()) throw ApiException.validation("Sync fleet[] entries need an id");
+                    try {
+                        fleet.add(Car.fromJson(d));
+                    } catch (NumberFormatException e) {
+                        throw ApiException.validation("Invalid car id: " + idStr);
+                    }
+                }
+                cars.replaceAll(c, fleet);
+                counts[0] = fleet.size();
+            }
+
+            // 2) drivers (full replace)
+            if (state.has("drivers")) {
+                List<Driver> list = new ArrayList<>();
+                for (JsonElement el : arr(state, "drivers")) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject d = el.getAsJsonObject();
+                    if (Json.getStr(d, "id", "").isEmpty()) throw ApiException.validation("Sync drivers[] entries need an id");
+                    try {
+                        list.add(Driver.fromJson(d));
+                    } catch (NumberFormatException e) {
+                        throw ApiException.validation("Invalid driver id: " + Json.getStr(d, "id", ""));
+                    }
+                }
+                drivers.replaceAll(c, list);
+                counts[1] = list.size();
+            }
+
+            // 3) users (upsert, never delete)
+            if (state.has("users")) {
+                int n = 0;
+                for (JsonElement el : arr(state, "users")) {
+                    if (!el.isJsonObject()) continue;
+                    users.upsertFromSync(c, el.getAsJsonObject(), Json.getStr(el.getAsJsonObject(), "password", ""));
+                    n++;
+                }
+                counts[2] = n;
+            }
+
+            // 4) orders (upsert, never delete) + overlap validation
+            if (state.has("orders")) {
+                List<Booking> incoming = new ArrayList<>();
+                for (JsonElement el : arr(state, "orders")) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject d = el.getAsJsonObject();
+                    if (Json.getStr(d, "id", "").isEmpty()) throw ApiException.validation("Sync orders[] entries need an id");
+                    Booking b = Booking.fromJson(d);
+                    incoming.add(b);
+                    bookings.upsert(c, b);
+                }
+                validateNoOverlaps(c, incoming);
+                counts[3] = incoming.size();
+            }
+
+            // 5) applications (upsert, never delete)
+            if (state.has("applications")) {
+                int n = 0;
+                for (JsonElement el : arr(state, "applications")) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject d = el.getAsJsonObject();
+                    if (Json.getStr(d, "id", "").isEmpty()) throw ApiException.validation("Sync applications[] entries need an id");
+                    apps.upsert(c, Application.fromJson(d));
+                    n++;
+                }
+                counts[4] = n;
+            }
+
+            // 6) notifications (upsert, never delete)
+            if (state.has("notifications")) {
+                int n = 0;
+                for (JsonElement el : arr(state, "notifications")) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject d = el.getAsJsonObject();
+                    notifs.upsertFromSync(c,
+                            Json.getStr(d, "id", ""),
+                            Json.getStr(d, "userId", "all"),
+                            Json.getStr(d, "title", ""),
+                            Json.getStr(d, "msg", ""),
+                            Json.getStr(d, "link", ""),
+                            Json.getStr(d, "adminTab", ""),
+                            Json.getBool(d, "read", false));
+                    n++;
+                }
+                counts[5] = n;
+            }
+
+            // 7) chats (upsert meta + merge messages, update counters)
+            if (state.has("chats")) {
+                int n = 0;
+                for (JsonElement el : arr(state, "chats")) {
+                    if (!el.isJsonObject()) continue;
+                    JsonObject d = el.getAsJsonObject();
+                    String userId = Json.getStr(d, "userId", "");
+                    if (userId.isEmpty()) continue;
+                    List<String[]> msgs = new ArrayList<>();
+                    if (d.has("messages") && d.get("messages").isJsonArray()) {
+                        for (JsonElement m : d.getAsJsonArray("messages")) {
+                            if (!m.isJsonObject()) continue;
+                            JsonObject mo = m.getAsJsonObject();
+                            msgs.add(new String[]{
+                                    Json.getStr(mo, "from", Json.getStr(mo, "sender", "user")),
+                                    Json.getStr(mo, "text", ""),
+                                    Json.getStr(mo, "time", "")});
+                        }
+                    }
+                    chats.merge(c, userId, Json.getStr(d, "userName", ""),
+                            Json.getStr(d, "lastTime", ""), msgs);
+                    // explicit counters from the admin UI win (e.g. admin marked read)
+                    if (d.has("unreadAdmin") || d.has("unreadUser")) {
+                        chats.setCounters(c, userId,
+                                Json.getInt(d, "unreadAdmin", 0), Json.getInt(d, "unreadUser", 0));
+                    }
+                    n++;
+                }
+                counts[6] = n;
+            }
+
+            // 8) banned CNICs (replace)
+            if (state.has("bannedCNICs")) {
+                List<String> cnics = new ArrayList<>();
+                for (JsonElement el : arr(state, "bannedCNICs")) {
+                    String cn = el.isJsonPrimitive() ? el.getAsString() : Json.getStr(el.getAsJsonObject(), "cnic", "");
+                    cn = cn.trim();
+                    if (cn.isEmpty()) continue;
+                    if (!cn.matches("[0-9]{13}")) {
+                        throw ApiException.validation("Invalid CNIC in banned list: " + cn);
+                    }
+                    cnics.add(cn);
+                }
+                bans.replaceAll(c, cnics);
+                counts[7] = cnics.size();
+            }
+
+            // 9) config (replace)
+            if (state.has("config") && state.get("config").isJsonObject()) {
+                settings.setConfig(c, state.getAsJsonObject("config"));
+            }
+            return null;
+        });
+
+        JsonObject o = new JsonObject();
+        o.addProperty("status", "synced");
+        o.addProperty("by", reviewer);
+        o.addProperty("fleet", counts[0]);
+        o.addProperty("drivers", counts[1]);
+        o.addProperty("users", counts[2]);
+        o.addProperty("orders", counts[3]);
+        o.addProperty("applications", counts[4]);
+        o.addProperty("notifications", counts[5]);
+        o.addProperty("chats", counts[6]);
+        o.addProperty("bannedCNICs", counts[7]);
+        return o;
     }
 
-    /* ------------------------------------------------ first-run seed */
-
-    public void seedIfEmpty(Path seedFile) throws SQLException, IOException {
-        boolean noCars = db.with(c -> cars.all().isEmpty());
-        if (!noCars) return;                       // catalog already present
-        JsonObject seed = null;
-        if (seedFile != null && Files.exists(seedFile)) {
-            seed = Json.parseObject(Files.readString(seedFile));
-        } else {
-            System.out.println("[APEX] WARNING: seed file not found at " + seedFile
-                    + " - fleet will stay EMPTY until you add cars in the admin panel");
-        }
-        if (seed == null) seed = Json.obj();
-        boolean fresh = db.with(c -> settings.get("config") == null);
-        if (fresh) {
-            sync(seed);                            // full first-run seed
-        } else {
-            // config exists but fleet is empty (e.g. MySQL switched on later):
-            // seed ONLY fleet + drivers, never touch existing users/orders/config
-            final JsonObject f = seed;
-            db.tx(c -> {
-                cars.replace(objectList(f, "fleet"));
-                drivers.replace(objectList(f, "drivers"));
-                return null;
-            });
-        }
-    }
-
-    /* ------------------------------------------------ single-row patches + crud */
-
-    public String engineName() { return db.engine(); }
-
-    public void upsertChat(JsonObject thread) throws SQLException {
-        db.tx(c -> { chats.upsertThread(thread); return null; });
-    }
-
-    /** Full replace of ONE order (server flows: pickup, return, payment review). */
-    public void patchOrder(JsonObject order) throws SQLException {
-        db.tx(c -> { bookings.upsert(order); return null; });
-    }
-
-    public JsonObject insert(String coll, JsonObject body) throws SQLException {
-        JsonArray list = collection(coll);
-        if (!body.has("id") || body.get("id").isJsonNull()) {
-            if ("fleet".equals(coll) || "drivers".equals(coll)) {
-                int max = 0;
-                for (var el : list) max = Math.max(max, Json.intVal(el.getAsJsonObject(), "id", 0));
-                body.addProperty("id", max + 1);
-            } else {
-                body.addProperty("id", "X" + System.currentTimeMillis());
+    /**
+     * After upserting synced orders, make sure no two active bookings of the
+     * same car overlap. Fail the whole sync (409) when the client state
+     * contains a clash - the server never silently stores double bookings.
+     */
+    private void validateNoOverlaps(PgConnection c, List<Booking> incoming) {
+        Map<Long, List<String[]>> byCar = new HashMap<>();
+        for (Booking b : incoming) {
+            if (b.data == null || b.data.get("items") == null) continue;
+            if (b.status == null || b.status.equals("Cancelled") || b.status.equals("Completed") || b.status.equals("Rejected")) {
+                continue;
+            }
+            for (JsonElement el : b.data.getAsJsonArray("items")) {
+                if (!el.isJsonObject()) continue;
+                JsonObject it = el.getAsJsonObject();
+                long carId = Json.getLong(it, "carId", 0);
+                String s = Json.getStr(it, "startDt", "");
+                String e = Json.getStr(it, "endDt", "");
+                if (carId <= 0 || s.isEmpty() || e.isEmpty()) continue;
+                byCar.computeIfAbsent(carId, k -> new ArrayList<>()).add(new String[]{b.id, s, e});
             }
         }
-        list.add(body);
-        setCollection(coll, list);
-        return body;
-    }
-
-    public JsonObject update(String coll, String id, JsonObject body) throws SQLException {
-        JsonArray list = collection(coll);
-        JsonObject found = null;
-        for (int i = 0; i < list.size(); i++) {
-            JsonObject o = list.get(i).getAsJsonObject();
-            if (String.valueOf(Json.idOf(o)).equals(id)) { found = o; list.set(i, body); }
-        }
-        if (found == null) return null;
-        if (!body.has("id")) body.add("id", found.get("id"));
-        setCollection(coll, list);
-        return body;
-    }
-
-    public boolean delete(String coll, String id) throws SQLException {
-        JsonArray list = collection(coll);
-        JsonArray kept = Json.arr();
-        boolean removed = false;
-        for (var el : list) {
-            if (String.valueOf(Json.idOf(el.getAsJsonObject())).equals(id)) removed = true;
-            else kept.add(el);
-        }
-        if (!removed) return false;
-        setCollection(coll, kept);
-        return true;
-    }
-
-    /** Public guard used before inserting a single order. */
-    public void assertNoClash(JsonObject order) throws SQLException {
-        List<JsonObject> all = new ArrayList<>(bookings.all());
-        all.add(order);
-        checkOverlaps(all);
-    }
-
-    /** Backend-side availability guard: same car, overlapping start/end windows. */
-    private static void checkOverlaps(List<JsonObject> orders) {
-        Map<String, List<JsonObject>> byCar = new LinkedHashMap<>();
-        for (JsonObject o : orders) {
-            if ("Cancelled".equals(Json.str(o, "status"))) continue;
-            String carId = firstCar(o);
-            if (carId.isEmpty()) continue;
-            byCar.computeIfAbsent(carId, k -> new ArrayList<>()).add(o);
-        }
-        for (Map.Entry<String, List<JsonObject>> e : byCar.entrySet()) {
-            List<JsonObject> l = e.getValue();
-            for (int i = 0; i < l.size(); i++) {
-                for (int j = i + 1; j < l.size(); j++) {
-                    String aS = Json.str(l.get(i), "startDt"), aE = Json.str(l.get(i), "endDt");
-                    String bS = Json.str(l.get(j), "startDt"), bE = Json.str(l.get(j), "endDt");
-                    if (aS == null || aE == null || bS == null || bE == null) continue;
-                    if (aS.compareTo(bE) < 0 && bS.compareTo(aE) < 0) {
-                        throw new IllegalArgumentException("Time clash: car " + e.getKey()
-                                + " is already booked for that window (bookings "
-                                + Json.idOf(l.get(i)) + " & " + Json.idOf(l.get(j)) + ")");
+        for (Map.Entry<Long, List<String[]>> en : byCar.entrySet()) {
+            List<String[]> rows = new ArrayList<>(bookings.windowsForCar(c, en.getKey()));
+            // drop DB rows that were just replaced by the incoming sync
+            rows.removeIf(r -> en.getValue().stream().anyMatch(x -> x[0].equals(r[0])));
+            rows.addAll(en.getValue());
+            for (int i = 0; i < rows.size(); i++) {
+                for (int j = i + 1; j < rows.size(); j++) {
+                    String[] a = rows.get(i);
+                    String[] b = rows.get(j);
+                    if (a[0].equals(b[0])) continue;
+                    if (a[1].compareTo(b[2]) < 0 && b[1].compareTo(a[2]) < 0) {
+                        throw ApiException.conflict("Sync rejected: double booking detected for car " +
+                                en.getKey() + " (bookings " + a[0] + " and " + b[0] + ")");
                     }
                 }
             }
         }
     }
 
-    private static String firstCar(JsonObject o) {
-        if (!o.has("items") || !o.get("items").isJsonArray()) return "";
-        var items = o.getAsJsonArray("items");
-        if (items.size() == 0 || !items.get(0).isJsonObject()) return "";
-        return String.valueOf(Json.intVal(items.get(0).getAsJsonObject(), "carId", -1));
-    }
-
-    /* ------------------------------------------------ helpers */
-
-    private static JsonArray toArray(List<JsonObject> rows) {
-        JsonArray a = Json.arr();
-        rows.forEach(a::add);
-        return a;
-    }
-
-    private static List<JsonObject> objectList(JsonObject s, String key) {
-        List<JsonObject> out = new ArrayList<>();
-        if (s.has(key) && s.get(key).isJsonArray())
-            s.getAsJsonArray(key).forEach(e -> { if (e.isJsonObject()) out.add(e.getAsJsonObject()); });
-        return out;
+    private static JsonArray arr(JsonObject state, String key) {
+        if (!state.has(key) || !state.get(key).isJsonArray()) return new JsonArray();
+        return state.getAsJsonArray(key);
     }
 }

@@ -1,0 +1,37 @@
+# Local full stack: app (Java 17 + PostgreSQL wire client) + database.
+#   docker compose up
+# App:  http://localhost:3030
+# DB:    localhost:5432 (user/pass/db = apex)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: apex
+      POSTGRES_PASSWORD: apex
+      POSTGRES_DB: apex
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apex -d apex"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "3030"
+      DATABASE_URL: postgres://apex:apex@db:5432/apex
+      APEX_ADMIN_USER: admin
+      APEX_ADMIN_PASS: admin1234
+    ports:
+      - "3030:3030"
+    volumes:
+      - uploads:/app/backend/uploads
+
+volumes:
+  pgdata:
+  uploads:

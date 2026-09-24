@@ -1,145 +1,172 @@
 package com.apex.web;
 
+import com.apex.log.Logger;
 import com.apex.service.AuthService;
 import com.apex.util.Json;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Tiny path router with {param} segments and three access levels:
- *  PUBLIC - anyone
- *  ANY    - any logged-in user (customer or admin)
- *  ADMIN  - admin role only (normal users can NEVER reach these)
+ * Tiny routing layer over com.sun.net.httpserver.
+ *
+ * Levels:
+ *  PUBLIC - no token required (optionally authenticated when a token is sent)
+ *  ANY    - token required (customer or admin)
+ *  ADMIN  - admin token required
  */
-public class Router {
+public final class Router {
 
-    public interface Handler {
-        void handle(Ctx ctx) throws Exception;
-    }
+    public enum Level { PUBLIC, ANY, ADMIN }
 
-    /** Per-request context handed to every handler. */
-    public static class Ctx {
+    /** Everything a handler needs about the current request. */
+    public static final class Ctx {
         public final HttpExchange ex;
-        public final Map<String, String> params;
-        public JsonObject body;
+        public final JsonObject body;
+        public final Map<String, String> query;
+        public final List<String> segments;
+        public final String method;
+        /** Path parameters resolved from {name} segments. */
+        public Map<String, String> params = new java.util.HashMap<>();
+        /** null when anonymous. */
         public JsonObject session;
-
-        Ctx(HttpExchange ex, Map<String, String> params) {
-            this.ex = ex;
-            this.params = params;
+        public boolean isAdmin() { return session != null && "admin".equals(Json.getStr(session, "role", "")); }
+        public String param(String name) {
+            String v = params.get(name);
+            return v == null ? "" : v;
         }
-
-        public String param(String key) { return params.get(key); }
-        public boolean isAdmin() { return session != null && "admin".equals(Json.str(session, "role")); }
-        public String userId() { return session == null ? null : Json.str(session, "username"); }
-        public void ok(Object payload) throws IOException { HttpUtil.sendJson(ex, 200, payload); }
-        public void created(Object payload) throws IOException { HttpUtil.sendJson(ex, 201, payload); }
+        public Ctx(HttpExchange ex, JsonObject body, Map<String, String> query, List<String> segments, String method) {
+            this.ex = ex; this.body = body; this.query = query; this.segments = segments; this.method = method;
+        }
     }
+
+    public interface Handler { void handle(Ctx ctx) throws Exception; }
 
     private static final class Route {
-        final String method;
-        final String[] segments;
-        final String access;   // PUBLIC | ANY | ADMIN
-        final Handler handler;
-
-        Route(String method, String path, String access, Handler handler) {
-            this.method = method;
-            this.segments = split(path);
-            this.access = access;
-            this.handler = handler;
-        }
+        final Level level; final Handler handler;
+        Route(Level level, Handler handler) { this.level = level; this.handler = handler; }
     }
 
-    private final List<Route> routes = new ArrayList<>();
     private final AuthService auth;
+    private final Map<String, Route> routes = new HashMap<>();
+    private final RateLimiter rateLimiter;
 
-    public Router(AuthService auth) {
+    public Router(AuthService auth, RateLimiter rateLimiter) {
         this.auth = auth;
+        this.rateLimiter = rateLimiter;
     }
 
-    public Router add(String method, String path, String access, Handler handler) {
-        routes.add(new Route(method, path, access, handler));
-        return this;
+    public Router get(String path, Level level, Handler h)  { add("GET", path, level, h); return this; }
+    public Router post(String path, Level level, Handler h) { add("POST", path, level, h); return this; }
+    public Router put(String path, Level level, Handler h)  { add("PUT", path, level, h); return this; }
+    public Router del(String path, Level level, Handler h)  { add("DELETE", path, level, h); return this; }
+
+    private void add(String method, String path, Level level, Handler h) {
+        routes.put(method + " " + path, new Route(level, h));
     }
 
-    public Router get(String path, Handler h) { return add("GET", path, "PUBLIC", h); }
-    public Router post(String path, Handler h) { return add("POST", path, "ADMIN", h); }
-    public Router put(String path, Handler h) { return add("PUT", path, "ADMIN", h); }
-    public Router delete(String path, Handler h) { return add("DELETE", path, "ADMIN", h); }
-    public Router any(String method, String path, Handler h) { return add(method, path, "ANY", h); }
+    private static final class Matched {
+        final Route route;
+        final Map<String, String> params;
+        Matched(Route route, Map<String, String> params) { this.route = route; this.params = params; }
+    }
 
-    /** Handles the exchange; returns false when no route matched (404 by caller). */
-    public boolean handle(HttpExchange ex) throws IOException {
-        String method = ex.getRequestMethod();
-        if ("OPTIONS".equals(method)) {
-            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-            ex.getResponseHeaders().set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-            ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type,Authorization");
-            ex.sendResponseHeaders(204, -1);
-            ex.close();
-            return true;
-        }
-        String[] pathSegs = split(URLDecoder.decode(ex.getRequestURI().getPath(), StandardCharsets.UTF_8));
-        for (Route r : routes) {
-            if (!r.method.equals(method)) continue;
-            Map<String, String> params = match(r.segments, pathSegs);
-            if (params == null) continue;
-            Ctx ctx = new Ctx(ex, params);
-            String raw = HttpUtil.readBody(ex);
-            if (!raw.isBlank()) {
-                try {
-                    JsonElement el = Json.parse(raw);
-                    if (el.isJsonObject()) ctx.body = el.getAsJsonObject();
-                } catch (Exception ignored) { }
-            }
-            try {
-                if (!"PUBLIC".equals(r.access)) {
-                    ctx.session = auth.validate(HttpUtil.bearer(ex));
-                    if (ctx.session == null) {
-                        HttpUtil.sendError(ex, 401, "Login required");
-                        return true;
-                    }
-                    if ("ADMIN".equals(r.access) && !ctx.isAdmin()) {
-                        HttpUtil.sendError(ex, 403, "Admin access required");
-                        return true;
-                    }
+    private Matched match(String method, List<String> segments) {
+        String exact = method + " /" + String.join("/", segments);
+        Route r = routes.get(exact);
+        if (r != null) return new Matched(r, new java.util.HashMap<String, String>());
+        for (Map.Entry<String, Route> e : routes.entrySet()) {
+            String[] mk = e.getKey().split(" ", 2);
+            if (!mk[0].equals(method)) continue;
+            List<String> mSegs = splitPath(mk[1]);
+            if (mSegs.size() != segments.size()) continue;
+            Map<String, String> params = new java.util.HashMap<>();
+            boolean ok = true;
+            for (int i = 0; i < mSegs.size(); i++) {
+                String seg = mSegs.get(i);
+                if (seg.startsWith("{") && seg.endsWith("}")) {
+                    params.put(seg.substring(1, seg.length() - 1), segments.get(i));
+                    continue;
                 }
-                r.handler.handle(ctx);
-            } catch (IllegalArgumentException e) {
-                HttpUtil.sendError(ex, 400, e.getMessage());
+                if (!seg.equals(segments.get(i))) { ok = false; break; }
+            }
+            if (ok) return new Matched(e.getValue(), params);
+        }
+        return null;
+    }
+
+    public HttpHandler handler() {
+        return ex -> {
+            try {
+                String method = ex.getRequestMethod().toUpperCase();
+                if ("OPTIONS".equals(method)) {
+                    ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+                    ex.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+                    ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
+                    ex.sendResponseHeaders(204, -1);
+                    ex.close();
+                    return;
+                }
+                String path = ex.getRequestURI().getPath();
+                List<String> segments = splitPath(path);
+                Matched matched = match(method, segments);
+                if (matched == null) {
+                    HttpUtil.sendError(ex, 404, "Not found: " + method + " " + path);
+                    return;
+                }
+                Route route = matched.route;
+                if (rateLimiter.blocked(ex, path, method)) {
+                    HttpUtil.sendError(ex, 429, "Too many requests - slow down");
+                    return;
+                }
+                Ctx ctx = new Ctx(ex,
+                        (method.equals("POST") || method.equals("PUT")) ? Json.readObject(ex.getRequestBody()) : new JsonObject(),
+                        HttpUtil.query(ex),
+                        segments,
+                        method);
+                ctx.params = matched.params;
+                String token = HttpUtil.bearer(ex);
+                if (route.level != Level.PUBLIC) {
+                    JsonObject sess = token != null ? auth.validate(token) : null;
+                    if (sess == null) {
+                        HttpUtil.sendError(ex, 401, "Authentication required");
+                        return;
+                    }
+                    ctx.session = sess;
+                    if (route.level == Level.ADMIN && !"admin".equals(Json.getStr(sess, "role", ""))) {
+                        HttpUtil.sendError(ex, 403, "Admin access required");
+                        return;
+                    }
+                } else if (token != null) {
+                    ctx.session = auth.validate(token);
+                }
+                route.handler.handle(ctx);
+            } catch (ApiException e) {
+                try {
+                    HttpUtil.sendError(ex, e.status, e.getMessage());
+                } catch (IOException ioe) { /* connection gone */ }
             } catch (Exception e) {
-                HttpUtil.sendError(ex, 500, "Server error");
+                Logger.error("Unhandled error on " + ex.getRequestMethod() + " " + ex.getRequestURI(), e);
+                try {
+                    HttpUtil.sendError(ex, 500, "Server error");
+                } catch (IOException ioe) { /* connection gone */ }
+            } finally {
+                ex.close();
             }
-            return true;
-        }
-        return false;
+        };
     }
 
-    private static String[] split(String path) {
-        List<String> parts = new ArrayList<>();
-        for (String p : path.split("/")) if (!p.isBlank()) parts.add(p);
-        return parts.toArray(new String[0]);
-    }
-
-    private static Map<String, String> match(String[] route, String[] path) {
-        if (route.length != path.length) return null;
-        Map<String, String> params = new HashMap<>();
-        for (int i = 0; i < route.length; i++) {
-            if (route[i].startsWith("{") && route[i].endsWith("}")) {
-                params.put(route[i].substring(1, route[i].length() - 1), path[i]);
-            } else if (!route[i].equals(path[i])) {
-                return null;
-            }
+    private static List<String> splitPath(String p) {
+        List<String> out = new ArrayList<>();
+        for (String seg : p.split("/")) {
+            if (!seg.isEmpty()) out.add(seg);
         }
-        return params;
+        return out;
     }
 }
