@@ -1,16 +1,15 @@
-# Runtime database (regenerated on first boot)
-backend/apex.db
-backend/apex.db-wal
-backend/apex.db-shm
-
-# Build output (build.sh regenerates it)
-backend/out/
+# Runtime secrets/config (never commit)
+backend/.env
 
 # User uploads — keep the folder, ignore contents
 backend/uploads/*
 !backend/uploads/.gitkeep
 
+# Build output (build.sh regenerates it)
+backend/out/
+
 # Misc
 __pycache__/
 *.pyc
 .DS_Store
+node_modules/

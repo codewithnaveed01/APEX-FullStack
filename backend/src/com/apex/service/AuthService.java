@@ -1,122 +1,138 @@
 package com.apex.service;
 
-import com.apex.config.AppConfig;
-import com.apex.dao.SessionDao;
-import com.apex.dao.UserDao;
+import com.apex.dao.SessionRepo;
+import com.apex.dao.UserRepo;
 import com.apex.db.Database;
+import com.apex.model.User;
 import com.apex.util.Json;
+import com.apex.util.Validation;
+import com.apex.web.ApiException;
 import com.google.gson.JsonObject;
+import org.mindrot.jbcrypt.BCrypt;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.sql.SQLException;
-import java.util.UUID;
+import java.security.SecureRandom;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Base64;
 
 /**
- * Authentication for BOTH roles:
- *  - admin    : env-configured credentials (APEX_ADMIN_USER / APEX_ADMIN_PASS)
- *  - customer : server-side accounts with salted SHA-256 password hashes
- * Tokens carry the role; the router enforces ADMIN vs ANY access per route.
+ * Authentication: BCrypt password checks + opaque server-side sessions.
+ * The admin account is seeded exactly once at startup (SeedService).
  */
-public class AuthService {
+public final class AuthService {
 
     private final Database db;
-    private final SessionDao sessions;
-    private final UserDao users;
-    private final AppConfig cfg;
+    private final UserRepo users;
+    private final SessionRepo sessions;
+    private final int sessionHours;
+    private final SecureRandom random = new SecureRandom();
 
-    public AuthService(Database db, SessionDao sessions, UserDao users, AppConfig cfg) {
+    public AuthService(Database db, UserRepo users, SessionRepo sessions, int sessionHours) {
         this.db = db;
-        this.sessions = sessions;
         this.users = users;
-        this.cfg = cfg;
+        this.sessions = sessions;
+        this.sessionHours = sessionHours;
     }
 
-    public JsonObject login(String username, String password) throws SQLException {
-        return db.tx(c -> {
-            sessions.purgeExpired();
-            if (username == null || password == null) return null;
-            if (cfg.getAdminUsername().equals(username) && cfg.getAdminPassword().equals(password)) {
-                return issue(username, "admin");
+    /** Returns the session JSON or null when credentials are wrong. */
+    public JsonObject login(String identifier, String password) {
+        String idn = Json.clean(identifier);
+        String pw = password == null ? "" : password;
+        if (idn.isEmpty() || pw.isEmpty()) return null;
+        return db.with(c -> {
+            User u = users.findByLogin(c, idn);
+            if (u == null) return null;
+            if (u.passwordHash == null || u.passwordHash.isEmpty() || !BCrypt.checkpw(pw, u.passwordHash)) {
+                return null;
             }
-            JsonObject u = users.findByLogin(username);
-            if (u == null || u.get("passwordHash") == null) return null;
-            String hash = hash(password, u.get("salt").getAsString());
-            if (!hash.equals(u.get("passwordHash").getAsString())) return null;
-            JsonObject out = issue(u.get("username").getAsString(), "customer");
-            out.add("user", publicUser(u));
-            return out;
+            return issue(c, u);
         });
     }
 
-    /** Creates a customer account with a salted hash; returns token + user. */
-    public JsonObject register(JsonObject b) throws SQLException {
-        String username = Json.str(b, "username", "").trim();
-        String email = Json.str(b, "email", "").trim().toLowerCase();
-        String name = Json.str(b, "name", "").trim();
-        String phone = Json.str(b, "phone", "").trim();
-        String password = Json.str(b, "password", "");
-        if (username.length() < 3) throw new IllegalArgumentException("Username must be at least 3 characters");
-        if (!email.contains("@")) throw new IllegalArgumentException("Valid email is required");
-        if (name.length() < 2) throw new IllegalArgumentException("Full name is required");
-        if (password.length() < 6) throw new IllegalArgumentException("Password must be at least 6 characters");
-        return db.tx(c -> {
-            if (users.findByLogin(username) != null) throw new IllegalArgumentException("Username or email already registered");
-            String salt = UUID.randomUUID().toString().substring(0, 12);
-            JsonObject u = Json.obj();
-            u.addProperty("id", "C" + System.currentTimeMillis());
-            u.addProperty("username", username);
-            u.addProperty("email", email);
-            u.addProperty("name", name);
-            u.addProperty("phone", phone);
-            u.addProperty("role", "customer");
-            u.addProperty("created", java.time.Instant.now().toString());
-            users.insertServer(u, hash(password, salt), salt);
-            JsonObject out = issue(username, "customer");
-            out.add("user", publicUser(u));
-            return out;
-        });
-    }
-
-    public JsonObject validate(String token) throws SQLException {
-        if (token == null || token.isBlank()) return null;
-        return db.with(c -> sessions.find(token));
-    }
-
-    public void logout(String token) throws SQLException {
-        db.tx(c -> { sessions.delete(token); return null; });
-    }
-
-    private JsonObject issue(String username, String role) throws SQLException {
-        String token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().substring(0, 8);
-        sessions.create(token, username, role);
-        JsonObject out = Json.obj();
-        out.addProperty("token", token);
-        out.addProperty("role", role);
-        out.addProperty("username", username);
-        out.addProperty("validHours", SessionDao.HOURS_VALID);
-        return out;
-    }
-
-    private JsonObject publicUser(JsonObject u) {
-        JsonObject p = Json.obj();
-        p.addProperty("id", Json.str(u, "id"));
-        p.addProperty("username", Json.str(u, "username"));
-        p.addProperty("email", Json.str(u, "email"));
-        p.addProperty("name", Json.str(u, "name"));
-        p.addProperty("phone", Json.str(u, "phone"));
-        return p;
-    }
-
-    public static String hash(String password, String salt) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] d = md.digest((salt + ":" + password).getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            for (byte x : d) sb.append(String.format("%02x", x));
-            return sb.toString();
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
+    public JsonObject register(JsonObject body) {
+        String username = Validation.required(Json.getStr(body, "username", ""), "username", 3, 30);
+        if (!username.matches("^[A-Za-z0-9_.-]+$")) {
+            throw ApiException.validation("Username may only contain letters, numbers, . _ -");
         }
+        String email = Validation.required(Json.getStr(body, "email", ""), "email", 5, 80);
+        if (!Validation.email(email)) throw ApiException.validation("Invalid email address");
+        String name = Validation.required(Json.getStr(body, "name", ""), "name", 2, 60);
+        String phone = Validation.phone(Json.getStr(body, "phone", ""));
+        String password = Json.getStr(body, "password", "");
+        if (password.length() < 6) throw ApiException.validation("Password must be at least 6 characters");
+        String cnic = Json.getStr(body, "cnic", "");
+        if (!cnic.isEmpty()) Validation.cnic(cnic);
+
+        final String fEmail = email.toLowerCase();
+        final String fUsername = username;
+        final String hash = BCrypt.hashpw(password, BCrypt.gensalt(10));
+
+        return db.tx(c -> {
+            QueryResultDup guard = dupCheck(c, fUsername, fEmail);
+            if (guard.usernameTaken) throw ApiException.conflict("Username is already taken");
+            if (guard.emailTaken) throw ApiException.conflict("An account with this email already exists");
+            String id = "U" + Long.toString(System.currentTimeMillis() / 1000, 36).toUpperCase()
+                    + Integer.toString(random.nextInt(46656), 36).toUpperCase();
+            JsonObject data = new JsonObject();
+            data.addProperty("id", id);
+            data.addProperty("username", fUsername);
+            data.addProperty("email", fEmail);
+            data.addProperty("name", name);
+            data.addProperty("phone", phone);
+            data.addProperty("cnic", cnic);
+            data.addProperty("role", "customer");
+            User u = new User(id, fUsername, fEmail, phone, name, cnic, "customer", hash,
+                    nowIso(), data);
+            users.insert(c, u, hash);
+            return issue(c, u);
+        });
+    }
+
+    private QueryResultDup dupCheck(com.apex.db.PgConnection c, String username, String email) {
+        com.apex.db.QueryResult u = c.query("SELECT 1 FROM users WHERE lower(username) = $1",
+                new String[]{username.toLowerCase()});
+        com.apex.db.QueryResult e = c.query("SELECT 1 FROM users WHERE lower(email) = $1",
+                new String[]{email.toLowerCase()});
+        return new QueryResultDup(u.rowCount() > 0, e.rowCount() > 0);
+    }
+
+    private static final class QueryResultDup {
+        final boolean usernameTaken, emailTaken;
+        QueryResultDup(boolean u, boolean e) { usernameTaken = u; emailTaken = e; }
+    }
+
+    /** Issues a session on the CALLER's connection (never borrows a second one). */
+    public JsonObject issue(com.apex.db.PgConnection c, User u) {
+        byte[] tok = new byte[32];
+        random.nextBytes(tok);
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(tok);
+        Instant expires = Instant.now().plus(sessionHours, ChronoUnit.HOURS);
+        sessions.create(c, token, u.id, u.username, u.role, expires);
+        JsonObject o = new JsonObject();
+        o.addProperty("token", token);
+        o.addProperty("role", u.role);
+        o.addProperty("username", u.username);
+        o.addProperty("userId", u.id);
+        o.add("user", u.publicJson());
+        o.addProperty("expiresAt", expires.toString());
+        return o;
+    }
+
+    /** Validates a bearer token; null when missing/expired/unknown. */
+    public JsonObject validate(String token) {
+        if (token == null || token.isBlank()) return null;
+        return sessions.find(token.trim());
+    }
+
+    public void logout(String token) {
+        if (token == null || token.isBlank()) return;
+        db.with(c -> {
+            sessions.delete(c, token.trim());
+            return null;
+        });
+    }
+
+    public static String nowIso() {
+        return Instant.now().toString();
     }
 }

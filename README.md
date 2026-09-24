@@ -1,163 +1,136 @@
-# APEX — Driven Beyond Ordinary (FULL-STACK)
+# APEX FullStack
 
-Customer website + operations (admin) panel + **Java OOP backend** + **SQLite database** —
-ek hi zip me, laptop par local chalane ke liye aur server/VPS/Docker par deploy karne ke liye.
-
-```
-┌────────────────────────┐   REST (JSON)    ┌──────────────────────────────┐
-│  frontend/             │ ───────────────► │  backend/  (Java 11, OOP)    │
-│  index.html  (customer)│  /api/bootstrap  │  web  → service → dao → db   │
-│  admin.html  (ops)     │  /api/sync       │  SQLite: apex.db (14 tables) │
-│  customer.js + adapter │  /api/cars ...   │  static files bhi serve      │
-└────────────────────────┘ ─────────────── └──────────────────────────────┘
-```
-
-## 1) Quick start (local laptop)
-
-Requirements: **JDK 11+** (javac/java). Koi aur dependency nahi — jars `backend/lib/` me shamil hain.
-
-**Linux / Mac**
-```bash
-cd backend
-./run.sh            # build (first time) + start on http://localhost:3030
-```
-
-**Windows**
-```bat
-cd backend
-run.bat
-```
-
-Phir browser me:
-- Customer website : `http://localhost:3030/`
-- Admin panel      : `http://localhost:3030/admin.html`  — login **admin / admin1234**
-- API health       : `http://localhost:3030/api/health`
-
-Port badalna ho: `PORT=9000 ./run.sh` (Windows: `set PORT=9000 && run.bat`).
-
-## 2) Folder structure
+Customer website + Operations (admin) panel + **Java OOP backend** + **PostgreSQL**.
 
 ```
-frontend/            Customer + admin SPA (original design, 3D depth effects)
-  index.html         Customer website
-  admin.html         Operations panel (login admin / admin1234)
-  customer.css       Styles
-  customer.js        App logic + "JAVA BACKEND SYNC ADAPTER" (end of file)
-  assets/            44 car images (main / interior / detail)
+frontend/            static SPA (index.html + admin.html + customer.js + customer.css)
 backend/
-  src/com/apex/      Java OOP source
-    model/           Car, Driver, User, Booking(+Items/Totals), OwnerApplication,
-                     Notification, Chat, SiteConfig   (entities + validation)
-    dao/             CarDao, DriverDao, UserDao, BookingDao, ApplicationDao,
-                     NotificationDao, ChatDao, BanDao, WalletDao, SessionDao,
-                     SettingsDao, BaseDao             (JDBC data-access layer)
-    service/         StateService (single write-path), AuthService (tokens),
-                     WalletService (ledger), StatsService (SQL aggregates)
-    web/             Router, ApiRoutes, StaticHandler, HttpUtil
-    db/              Database (schema + transactions)
-    config/          AppConfig (env-driven)
-  lib/               gson, sqlite-jdbc, slf4j jars (bundled)
-  seed.json          First-run seed: 13 cars + 3 drivers + company settings
-  schema.sql         Database ka full reference DDL (14 tables)
-  build.sh / build.bat / run.sh / run.bat
-Dockerfile           2-stage image (JDK build → JRE run)
+  src/com/apex/      Java 17 source (controllers → services → repos → db wire client)
+  migrations/        PostgreSQL schema (applied automatically on boot)
+  lib/               gson-2.10.1.jar (only dependency; BCrypt is vendored in src)
+  seed.json          first-boot fleet/drivers/config seed
+  .env.example       all supported environment variables
+Dockerfile           multi-stage temurin:17 build
+docker-compose.yml   app + postgres, one command
+railway.json         Railway deploy config (Dockerfile builder, /health check)
 ```
 
-## 3) Java OOP design
+## Architecture
 
-- **Encapsulation** — har entity private fields + getters/setters + `validate()`.
-- **Layered architecture** — `web` (HTTP) → `service` (business rules) → `dao` (JDBC) → `db` (SQLite). Controllers kabhi SQL nahi likhte; DAOs kabhi HTTP nahi dekhte.
-- **Polymorphism / abstraction** — `BaseDao` shared JDBC behaviour, `Router.Handler` functional interface, `Database.TxWork<T>` transaction callback.
-- **Inheritance** — sab DAOs `BaseDao extends`; services composition se wired (`Main` composition root).
-- **Single write-path** — frontend ka state document `PUT /api/sync` par aata hai aur `StateService` usay **ek transaction** me 14 normalized tables me likhta hai. `GET /api/bootstrap` tables se wahi document wapas banata hai.
+- **`web/`** — HTTP router, static file server, rate limiter, centralized `ApiException`
+  (400/401/403/404/409/422/500 → `{"error": "..."}`), controllers per resource.
+- **`service/`** — business rules: server-side pricing (hourly + daily + discounts + late
+  fees with grace/cap), booking with **advisory-lock double-booking protection**,
+  payment verification flow, 90/10 owner payouts, uploads, sync, stats, auth (BCrypt +
+  DB sessions).
+- **`dao/`** — one repository per table family; all SQL lives here.
+- **`db/`** — self-contained PostgreSQL wire-protocol client (v3, SCRAM-SHA-256/MD5/
+  cleartext, extended query protocol) + connection pool + transaction helper +
+  startup migrator. **No JDBC driver jar needed.**
+- **`migrations/001_init.sql`** — 18 tables: users, sessions, cars, drivers, bookings,
+  booking_items, owner_applications, notifications, chat_threads, chat_messages,
+  banned_cnic, wallet, owner_wallets, wallet_transactions, documents (BYTEA), payments,
+  reviews, app_settings.
 
-## 4) Database (SQLite — `backend/apex.db`, first run par auto-create + seed)
+Money is **always computed server-side** from `cars.rate` / `hourly_rate` / settings —
+client-sent prices are never trusted. Receipt upload → `Pending Verification`; only an
+admin action verifies (credits wallet) / rejects / requests re-upload.
 
-| Table | Kaam |
-|---|---|
-| `cars` | Fleet (13 seed cars) — normalized columns + raw JSON |
-| `drivers` | Chauffeur roster |
-| `users` | Customer / partner accounts |
-| `bookings` | Reservations — totals flattened for SQL reporting |
-| `booking_items` | Har booking ke vehicle lines (dates, city, service, driver) |
-| `owner_applications` | "List your car" onboarding applications |
-| `notifications` | In-app notifications |
-| `chats` | Support chat threads |
-| `banned_cnic` | Banned CNIC list (checkout block) |
-| `wallet` | Admin wallet balance (all payments first) |
-| `owner_wallets` | Per-owner 90% payout balances |
-| `wallet_transactions` | Wallet audit ledger (add-cash / withdraw) |
-| `sessions` | Admin bearer tokens (12h expiry) |
-| `settings` | Company / payment config document |
+## Local run (no Docker)
 
-## 5) REST API (sab JSON)
+Requirements: JDK 17+, PostgreSQL 14+.
 
-Public reads: `GET /api/health · /api/bootstrap · /api/stats · /api/settings ·
-/api/cars · /api/cars/{id} · /api/drivers · /api/bookings · /api/applications ·
-/api/users · /api/notifications · /api/chats · /api/banned-cnic`
-
-Auth: `POST /api/auth/login {username,password} → {token}` · `POST /api/auth/logout` · `GET /api/auth/me`
-
-Admin (Bearer token) writes:
-- `PUT /api/sync` — full state sync (frontend adapter automatically)
-- `POST|PUT|DELETE /api/cars[/{id}]`, same for `/api/drivers`, `/api/bookings`, `/api/applications`, `/api/users`, `/api/notifications`, `/api/chats`
-- `POST /api/banned-cnic` · `DELETE /api/banned-cnic/{cnic}`
-- `GET /api/wallet` · `POST /api/wallet/add-cash {amount,note}` · `POST /api/wallet/withdraw {amount,note}`
-- `PUT /api/settings`
-
-Example:
 ```bash
-TOKEN=$(curl -s -X POST localhost:3030/api/auth/login -H 'Content-Type: application/json' \
-        -d '{"username":"admin","password":"admin1234"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
-curl -s localhost:3030/api/stats -H "Authorization: Bearer $TOKEN"
+# 1) database
+createdb apex                       # or: psql -c 'CREATE DATABASE apex'
+
+# 2) configure
+cp backend/.env.example backend/.env
+#   set DATABASE_URL=postgres://USER:PASS@localhost:5432/apex
+
+# 3) build + run
+cd backend
+bash build.sh
+export $(grep -v '^#' .env | xargs) APEX_HOME=$PWD
+java -cp "out:lib/*" com.apex.Main
 ```
 
-## 6) Frontend ↔ backend sync
+Open http://localhost:3030 — migrations run automatically, fleet is seeded from
+`seed.json`, and the admin account is created **once** from `APEX_ADMIN_USER` /
+`APEX_ADMIN_PASS` (defaults `admin` / `admin1234` — change them in production).
 
-`customer.js` ke end me adapter hai:
-- Page load par `GET /api/bootstrap` se poora state (fleet, bookings, wallet…) database se aata hai.
-- Har `persist()` ke baad 700ms debounce se `PUT /api/sync` (admin token ke sath) — yani admin login ke baad customer + admin dono pages ka har change database me save hota hai.
-- Admin login `POST /api/auth/login` se token leta hai; logout par token clear.
-- Server na mile (file:// double-click) to original localStorage mode — kuch nahi tootta.
+## Docker
 
-## 7) Deploy
-
-**Docker (sab se asaan)**
 ```bash
-docker build -t apex-fullstack .
-docker run -d -p 3030:3030 -v apex-data:/app/backend --name apex apex-fullstack
+docker compose up --build
+# app → http://localhost:3030   db → postgres://apex:apex@localhost:5432/apex
 ```
 
-**Render (one-click)**
-```
-GitHub push → Render "New +" → Blueprint → render.yaml select → Deploy
-```
-Deploy ke baad `APEX_ADMIN_PASS` env var apna strong password set karein.
+## Deploy to Railway — 10 steps
 
-**VPS (Ubuntu) + systemd** — see `DEPLOY_GUIDE.txt` (scp zip, JDK install, service file, Nginx proxy).
+1. **Push this repo to GitHub** (this branch or your fork).
+2. In Railway dashboard click **+ New Project → Deploy from GitHub repo** and pick the
+   repo. `railway.json` makes Railway build the root `Dockerfile` automatically.
+3. In the project open **+ New → Database → PostgreSQL**. Railway provisions a
+   Postgres instance and injects `DATABASE_URL` into your service.
+4. Click the app service → **Variables** tab and confirm `DATABASE_URL` is linked
+   (Railway does this automatically when the database is in the same project).
+5. Add the admin seed variables: `APEX_ADMIN_USER=admin` and a strong
+   `APEX_ADMIN_PASS` (this account is created only on the first boot).
+   Optional: `APEX_SESSION_HOURS=24`, `APEX_DB_POOL=5`.
+6. **Settings → Networking** expose port **3030** (the app reads Railway's `PORT`
+   override if you change it — set `PORT` to match the exposed port).
+7. **Deploy.** First boot applies `backend/migrations/*.sql`, seeds the fleet, and
+   creates the admin user. Watch the build logs for
+   `APEX ready in ... ms`.
+8. Open the generated `*.railway.app` domain → you should see the APEX website.
+   Check `https://<your-domain>/health` → `{"status":"ok","db":"up"}`.
+9. Go to `admin.html` on the same domain and sign in with the `APEX_ADMIN_USER` /
+   `APEX_ADMIN_PASS` you set in step 5.
+10. Everything (bookings, payments, chats, uploads) now persists in Railway's
+    PostgreSQL. Redeploys keep the data; only `backend/uploads` volume is ephemeral
+    unless you attach a volume — uploaded document bytes are stored **inside
+    Postgres (BYTEA)** as the source of truth, so nothing is lost.
 
-**Render / Railway** — Dockerfile detect ho jata hai; start command `java -cp "out:lib/*" com.apex.Main` with `APEX_HOME=backend`.
+No MySQL anywhere: not in code, not in Docker, not in this guide.
 
-Static-only deploy (bina backend) chahiye to original single-file previews alag maujood hain; is zip me full-stack hai.
+## Configuration
 
-## 8) Security notes (hardened demo build)
+All configuration is environment-based (see `backend/.env.example`):
 
-- **Bearer-token authorization** — sab mutating endpoints (sync, CRUD, wallet, bans, settings) admin token mangte hain; token 12h expiry ke sath `sessions` table me.
-- **Brute-force lockout** — `/api/auth/login` par 5 ghalat attempts = 5 minute IP lock; sliding-window rate limit (10/min).
-- **Rate limiting** — public `POST /api/payments/record` par 20/min; amount cap PKR 1,000,000; type whitelist (`payment`, `cancellation-fee`). Wallet ops par PKR 100M cap.
-- **Sanitized public bootstrap** — bina token ke `GET /api/bootstrap` customer CNIC/phone aur wallet balances **hide** kerta hai; full data sirf admin token ke sath.
-- **Security headers** — `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, `Permissions-Policy` har response par.
-- **Input hardening** — 5 MB body cap, strict amount validation, path traversal + dotfile block, SQLite transactions (rollback on error).
-- Credentials env se: `APEX_ADMIN_USER` / `APEX_ADMIN_PASS` (local default admin/admin1234).
-- Production checklist: HTTPS (Render/Docker-proxy automatic), strong env password, persistent disk, aur agar customer accounts ko server-side auth chahiye to sessions table extend karein. Demo frontend ka customer login client-side hai — isi liye public bootstrap sanitize kia gaya hai.
+| Variable | Purpose | Default |
+|---|---|---|
+| `PORT` | HTTP port | `3030` |
+| `DATABASE_URL` | `postgres://user:pass@host:port/db?sslmode=require` | — |
+| `PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE` | alternative to URL | local |
+| `APEX_ADMIN_USER` / `APEX_ADMIN_PASS` | seeded admin (once) | `admin` / `admin1234` |
+| `APEX_SESSION_HOURS` | session lifetime | `24` |
+| `APEX_DB_POOL` | connection pool size | `5` |
+| `APEX_HOME` / `APEX_STATIC` / `APEX_UPLOADS` | paths | auto |
 
-## 9) v2 updates (is build me)
+## API overview
 
-- **Full car images** — cards / gallery / thumbnails ab `object-fit: contain` use karte hain; car kabhi crop/zoom nahi hoti.
-- **Admin wallet samne** — admin panel kholte hi **Payments** tab (wallet panel) khulta hai; login bhi seedha wallet par le jata hai.
-- **Withdrawal with account** — withdraw ab modal se hota hai: amount + account type (Bank / JazzCash / easypaisa) + account number + title **required**; server ledger me destination account record hota hai (`wallet_transactions.account`). Backend bina account ke withdrawal ko 400 se reject karta hai.
-- **Customer payments → admin wallet (server)** — checkout par online payment hote hi frontend `POST /api/payments/record` call karta hai; amount **database ke admin wallet** me jama hota hai (ledger entry ke sath), chahe admin login ho ya na ho. Cancellation fee (5%) bhi record hoti hai. Wallet panel me **Server ledger ↗** button se live ledger dekhi ja sakti hai.
-- **Owner full verification** — "List your car" form ab **CNIC (format-checked), driving licence, registration + declaration** mangta hai; banned CNIC block hota hai. Admin review me CNIC / licence / verification status dikhta hai; **Approved for onboarding** sirf tab chalta hai jab documents **Verified** hon aur CNIC banned na ho.
-- **Clickable notifications** — har notification relevant page par le jati hai (customer: bookings/account/home; admin: Reservations / Payments / Messages / Partner applications).
+`GET /health` · `GET/PUT /api/settings` · `POST /api/auth/{register,login,logout}` ·
+`GET /api/auth/me` · `GET /api/bootstrap` · `PUT /api/sync` (admin) ·
+`GET/POST/PUT/DELETE /api/fleet[/{id}]` · `GET /api/availability` ·
+`POST /api/orders` + `GET/PUT/DELETE /api/orders/{id}` ·
+`POST /api/bookings/{id}/{pickup,return,cancel}` ·
+`POST /api/payments/{submit,record}` · `GET /api/payments` ·
+`POST /api/payments/{id}/review` · `POST /api/uploads` ·
+`GET /api/documents[/{id}]` · `POST /api/documents/{id}/review` ·
+`GET/POST/DELETE /api/reviews[...]` · `POST /api/chats/send` · `GET /api/chats` ·
+`GET/POST/DELETE /api/banned-cnic[/{cnic}]` · `GET /api/stats` ·
+`GET /api/wallet` · `POST /api/wallet/{add-cash,withdraw}` ·
+collection CRUD for `users`, `drivers`, `applications`, `notifications` (admin).
 
-Developed for APEX — Spidy red footer frontend me shamil hai.
+Errors always return `{"error": "message"}` with the proper status code.
+
+## Security notes
+
+- Passwords hashed with BCrypt; sessions are opaque random tokens in Postgres.
+- Admin credentials exist only server-side — nothing sensitive is in `customer.js`.
+- CNIC / licence / receipt uploads: image magic-byte validation, 2.5 MB cap, stored in
+  Postgres, readable only by the owner or an admin (no public URLs).
+- CNIC ban list checked at booking time; bookings are serialized per car with
+  `pg_advisory_xact_lock` so concurrent requests cannot double-book.
+- Rate limiting on auth and upload endpoints; path traversal blocked on static files.

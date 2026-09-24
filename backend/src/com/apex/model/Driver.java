@@ -1,35 +1,55 @@
 package com.apex.model;
 
-/** A chauffeur on the driver roster. */
-public class Driver {
+import com.apex.util.Json;
+import com.google.gson.JsonObject;
 
-    private long id;
-    private String name;
-    private String phone;
-    private String city;
-    private Integer experience;
-    private String license;
-    private boolean active;
+/** A driver. `data` is the frontend shape. */
+public final class Driver {
+    public final long id;
+    public final String name, phone, city, license, status;
+    public final int experience;
+    public final boolean active;
+    public final JsonObject data;
 
-    public Driver() { }
+    private Driver(String id, String name, String phone, String city, Integer experience,
+                   String license, Boolean active, String status, JsonObject data) {
+        this.id = Long.parseLong(id);
+        this.name = name; this.phone = phone; this.city = city;
+        this.experience = experience == null ? 0 : experience;
+        this.license = license; this.status = status;
+        this.active = active == null || active;
+        this.data = data;
+    }
 
-    public long getId() { return id; }
-    public void setId(long id) { this.id = id; }
-    public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
-    public String getPhone() { return phone; }
-    public void setPhone(String phone) { this.phone = phone; }
-    public String getCity() { return city; }
-    public void setCity(String city) { this.city = city; }
-    public Integer getExperience() { return experience; }
-    public void setExperience(Integer experience) { this.experience = experience; }
-    public String getLicense() { return license; }
-    public void setLicense(String license) { this.license = license; }
-    public boolean isActive() { return active; }
-    public void setActive(boolean active) { this.active = active; }
+    public JsonObject toJson() { return data; }
 
-    public void validate() {
-        if (name == null || name.isBlank()) throw new IllegalArgumentException("Driver name is required");
-        if (phone == null || phone.isBlank()) throw new IllegalArgumentException("Driver phone is required");
+    public static Driver fromJson(JsonObject j) {
+        if (j == null) return null;
+        JsonObject d = j.deepCopy();
+        return new Driver(
+                Json.clean(d.get("id") == null ? "" : d.get("id").getAsString()),
+                Json.getStr(d, "name", ""),
+                Json.getStr(d, "phone", ""),
+                Json.getStr(d, "city", ""),
+                d.has("experience") ? Integer.valueOf(Json.getInt(d, "experience", 0)) : null,
+                Json.getStr(d, "license", ""),
+                d.has("active") ? Boolean.valueOf(Json.getBool(d, "active", true)) : null,
+                Json.getStr(d, "status", ""),
+                d);
+    }
+
+    public static Driver fromRow(com.apex.db.QueryResult qr, int row) {
+        String data = qr.col("data", row);
+        JsonObject d = data == null ? new JsonObject() : safeParse(data);
+        d.addProperty("id", Long.parseLong(qr.rows.get(row)[0]));
+        return fromJson(d);
+    }
+
+    private static JsonObject safeParse(String s) {
+        try {
+            return com.google.gson.JsonParser.parseString(s).getAsJsonObject();
+        } catch (RuntimeException e) {
+            return new JsonObject();
+        }
     }
 }

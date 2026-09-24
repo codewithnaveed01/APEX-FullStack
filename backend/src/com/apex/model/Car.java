@@ -1,97 +1,77 @@
 package com.apex.model;
 
-import java.util.List;
-import java.util.Map;
+import com.apex.util.Json;
+import com.google.gson.JsonObject;
 
-/**
- * A rentable vehicle of the fleet. Field names mirror the frontend JSON
- * contract 1:1 so Gson can bind both directions without adapters.
- */
-public class Car {
+/** A car in the fleet. `data` is the exact frontend shape (round-trips). */
+public final class Car {
+    public final long id;
+    public final String name, brand, category, origin, image, carCondition, status, marketNote, ownerId;
+    public final int year, seats;
+    public final long rate, hourlyRate, deposit;
+    public final String engine, power, fuel, km, color, plate;
+    public final JsonObject data;
 
-    private int id;
-    private String name;
-    private String brand;
-    private String category;
-    private String image;
-    private Integer year;
-    private Integer rate;
-    private Integer deposit;
-    private Integer seats;
-    private String engine;
-    private String power;
-    private String fuel;
-    private String km;
-    private String color;
-    private String plate;
-    private String condition;
-    private String status;
-    private String origin;
-    private String marketNote;
-    private String customImage;
-    private String ownerId;
-    private Double ownerShare;
-    private Double companyShare;
-    private List<String> features;
-    private Map<String, String> customImages;
+    private Car(String id, String name, String brand, String category, String origin, String image,
+                Integer year, Long rate, Long hourlyRate, Long deposit, Integer seats,
+                String engine, String power, String fuel, String km, String color, String plate,
+                String condition, String status, String marketNote, String ownerId, JsonObject data) {
+        this.id = Long.parseLong(id);
+        this.name = name; this.brand = brand; this.category = category; this.origin = origin;
+        this.image = image; this.carCondition = condition; this.status = status;
+        this.marketNote = marketNote; this.ownerId = ownerId;
+        this.year = year == null ? 0 : year;
+        this.seats = seats == null ? 0 : seats;
+        this.rate = rate == null ? 0 : rate;
+        this.hourlyRate = hourlyRate == null ? 0 : hourlyRate;
+        this.deposit = deposit == null ? 0 : deposit;
+        this.engine = engine; this.power = power; this.fuel = fuel; this.km = km;
+        this.color = color; this.plate = plate;
+        this.data = data;
+    }
 
-    public Car() { }
+    public JsonObject toJson() { return data; }
 
-    public int getId() { return id; }
-    public void setId(int id) { this.id = id; }
-    public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
-    public String getBrand() { return brand; }
-    public void setBrand(String brand) { this.brand = brand; }
-    public String getCategory() { return category; }
-    public void setCategory(String category) { this.category = category; }
-    public String getImage() { return image; }
-    public void setImage(String image) { this.image = image; }
-    public Integer getYear() { return year; }
-    public void setYear(Integer year) { this.year = year; }
-    public Integer getRate() { return rate; }
-    public void setRate(Integer rate) { this.rate = rate; }
-    public Integer getDeposit() { return deposit; }
-    public void setDeposit(Integer deposit) { this.deposit = deposit; }
-    public Integer getSeats() { return seats; }
-    public void setSeats(Integer seats) { this.seats = seats; }
-    public String getEngine() { return engine; }
-    public void setEngine(String engine) { this.engine = engine; }
-    public String getPower() { return power; }
-    public void setPower(String power) { this.power = power; }
-    public String getFuel() { return fuel; }
-    public void setFuel(String fuel) { this.fuel = fuel; }
-    public String getKm() { return km; }
-    public void setKm(String km) { this.km = km; }
-    public String getColor() { return color; }
-    public void setColor(String color) { this.color = color; }
-    public String getPlate() { return plate; }
-    public void setPlate(String plate) { this.plate = plate; }
-    public String getCondition() { return condition; }
-    public void setCondition(String condition) { this.condition = condition; }
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
-    public String getOrigin() { return origin; }
-    public void setOrigin(String origin) { this.origin = origin; }
-    public String getMarketNote() { return marketNote; }
-    public void setMarketNote(String marketNote) { this.marketNote = marketNote; }
-    public String getCustomImage() { return customImage; }
-    public void setCustomImage(String customImage) { this.customImage = customImage; }
-    public String getOwnerId() { return ownerId; }
-    public void setOwnerId(String ownerId) { this.ownerId = ownerId; }
-    public Double getOwnerShare() { return ownerShare; }
-    public void setOwnerShare(Double ownerShare) { this.ownerShare = ownerShare; }
-    public Double getCompanyShare() { return companyShare; }
-    public void setCompanyShare(Double companyShare) { this.companyShare = companyShare; }
-    public List<String> getFeatures() { return features; }
-    public void setFeatures(List<String> features) { this.features = features; }
-    public Map<String, String> getCustomImages() { return customImages; }
-    public void setCustomImages(Map<String, String> customImages) { this.customImages = customImages; }
+    public static Car fromJson(JsonObject j) {
+        if (j == null) return null;
+        JsonObject d = j.deepCopy();
+        return new Car(
+                Json.clean(d.get("id") == null ? "" : d.get("id").getAsString()),
+                Json.getStr(d, "name", ""),
+                Json.getStr(d, "brand", ""),
+                Json.getStr(d, "category", ""),
+                Json.getStr(d, "origin", ""),
+                Json.getStr(d, "image", ""),
+                Json.obj(d, "year") != null || d.has("year") ? Integer.valueOf(Json.getInt(d, "year", 0)) : null,
+                d.has("rate") ? Long.valueOf(Json.getLong(d, "rate", 0)) : null,
+                d.has("hourlyRate") ? Long.valueOf(Json.getLong(d, "hourlyRate", 0)) : null,
+                d.has("deposit") ? Long.valueOf(Json.getLong(d, "deposit", 0)) : null,
+                d.has("seats") ? Integer.valueOf(Json.getInt(d, "seats", 0)) : null,
+                Json.getStr(d, "engine", ""),
+                Json.getStr(d, "power", ""),
+                Json.getStr(d, "fuel", ""),
+                Json.getStr(d, "km", ""),
+                Json.getStr(d, "color", ""),
+                Json.getStr(d, "plate", ""),
+                Json.getStr(d, "condition", ""),
+                Json.getStr(d, "status", "Active"),
+                Json.getStr(d, "marketNote", ""),
+                Json.getStr(d, "ownerId", ""),
+                d);
+    }
 
-    /** Server-side validation used by the admin CRUD endpoints. */
-    public void validate() {
-        if (name == null || name.isBlank()) throw new IllegalArgumentException("Car name is required");
-        if (brand == null || brand.isBlank()) throw new IllegalArgumentException("Car brand is required");
-        if (rate == null || rate <= 0) throw new IllegalArgumentException("Daily rate must be > 0");
+    public static Car fromRow(com.apex.db.QueryResult qr, int row) {
+        String data = qr.col("data", row);
+        JsonObject d = data == null ? new JsonObject() : safeParse(data);
+        d.addProperty("id", Long.parseLong(qr.rows.get(row)[0]));
+        return fromJson(d);
+    }
+
+    private static JsonObject safeParse(String s) {
+        try {
+            return com.google.gson.JsonParser.parseString(s).getAsJsonObject();
+        } catch (RuntimeException e) {
+            return new JsonObject();
+        }
     }
 }

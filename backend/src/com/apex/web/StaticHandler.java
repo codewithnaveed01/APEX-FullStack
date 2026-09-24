@@ -1,71 +1,71 @@
 package com.apex.web;
 
+import com.apex.log.Logger;
 import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
 import java.util.Map;
 
-/** Serves the customer + admin frontend (and /assets images) from disk. */
-public class StaticHandler implements HttpHandler {
+/** Serves the frontend directory with path-traversal protection. */
+public final class StaticHandler {
 
-    private static final Map<String, String> MIME = Map.ofEntries(
-            Map.entry("html", "text/html; charset=utf-8"),
-            Map.entry("css", "text/css; charset=utf-8"),
-            Map.entry("js", "application/javascript; charset=utf-8"),
-            Map.entry("json", "application/json; charset=utf-8"),
-            Map.entry("jpg", "image/jpeg"),
-            Map.entry("jpeg", "image/jpeg"),
-            Map.entry("png", "image/png"),
-            Map.entry("gif", "image/gif"),
-            Map.entry("svg", "image/svg+xml"),
-            Map.entry("ico", "image/x-icon"),
-            Map.entry("txt", "text/plain; charset=utf-8"),
-            Map.entry("woff", "font/woff"),
-            Map.entry("woff2", "font/woff2")
-    );
+    private static final Map<String, String> MIME = new HashMap<>();
+    static {
+        MIME.put(".html", "text/html; charset=utf-8");
+        MIME.put(".css", "text/css; charset=utf-8");
+        MIME.put(".js", "application/javascript; charset=utf-8");
+        MIME.put(".json", "application/json; charset=utf-8");
+        MIME.put(".jpg", "image/jpeg");
+        MIME.put(".jpeg", "image/jpeg");
+        MIME.put(".png", "image/png");
+        MIME.put(".gif", "image/gif");
+        MIME.put(".webp", "image/webp");
+        MIME.put(".svg", "image/svg+xml");
+        MIME.put(".ico", "image/x-icon");
+        MIME.put(".woff", "font/woff");
+        MIME.put(".woff2", "font/woff2");
+        MIME.put(".txt", "text/plain; charset=utf-8");
+    }
 
     private final Path root;
 
-    public StaticHandler(Path root) {
-        this.root = root.toAbsolutePath().normalize();
+    public StaticHandler(String dir) {
+        this.root = Paths.get(dir).toAbsolutePath().normalize();
+        if (!Files.isDirectory(root)) {
+            Logger.warn("Static dir not found: {} (API will still work)", root);
+        }
     }
 
-    @Override
-    public void handle(HttpExchange ex) throws IOException {
-        String path = URLDecoder.decode(ex.getRequestURI().getPath(), StandardCharsets.UTF_8);
-        if (path.equals("/") || path.isBlank()) path = "/index.html";
-        Path file = root.resolve(path.startsWith("/") ? path.substring(1) : path).normalize();
-        String fname = file.getFileName().toString();
-        if (!file.startsWith(root) || fname.startsWith(".")) {
-            ex.sendResponseHeaders(403, -1);
-            ex.close();
+    public void serve(HttpExchange ex) throws IOException {
+        String path = ex.getRequestURI().getPath();
+        if (!"/".equals(path)) {
+            path = path.replace("..", "");
+        }
+        Path file = root.resolve(path.substring(1)).normalize();
+        if (!file.startsWith(root) || Files.isDirectory(file)) {
+            file = root.resolve("index.html");
+        }
+        if (!Files.isRegularFile(file)) {
+            HttpUtil.sendError(ex, 404, "Not found");
             return;
         }
-        if (Files.isDirectory(file)) file = file.resolve("index.html");
-        if (!Files.exists(file) || !Files.isRegularFile(file)) {
-            byte[] msg = ("404 - not found: " + path).getBytes(StandardCharsets.UTF_8);
-            ex.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
-            ex.sendResponseHeaders(404, msg.length);
-            ex.getResponseBody().write(msg);
-            ex.close();
-            return;
-        }
+        String ext = extOf(file.getFileName().toString()).toLowerCase();
+        String mime = MIME.getOrDefault(ext, "application/octet-stream");
         byte[] data = Files.readAllBytes(file);
-        String name = file.getFileName().toString();
-        int dot = name.lastIndexOf('.');
-        String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : "";
-        ex.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
-        ex.getResponseHeaders().set("X-Frame-Options", "SAMEORIGIN");
-        ex.getResponseHeaders().set("Referrer-Policy", "no-referrer");
-        ex.getResponseHeaders().set("Content-Type", MIME.getOrDefault(ext, "application/octet-stream"));
-        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        ex.getResponseHeaders().set("Content-Type", mime);
         ex.sendResponseHeaders(200, data.length);
-        ex.getResponseBody().write(data);
-        ex.close();
+        try (OutputStream os = ex.getResponseBody()) {
+            os.write(data);
+        }
+    }
+
+    private static String extOf(String name) {
+        int i = name.lastIndexOf('.');
+        return i < 0 ? "" : name.substring(i);
     }
 }

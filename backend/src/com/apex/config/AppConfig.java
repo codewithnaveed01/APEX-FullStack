@@ -1,124 +1,149 @@
 package com.apex.config;
 
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.net.URI;
+import java.util.Locale;
 
 /**
- * Runtime configuration. Everything can be overridden through environment
- * variables so the same build runs on a laptop and on a VPS / container.
+ * All configuration comes from the environment so the same build runs
+ * locally, in Docker and on Railway.
  *
- *  PORT          - HTTP port (default 8080)
- *  APEX_HOME     - backend working directory (db + seed file live here)
- *  APEX_DB       - explicit SQLite file path
- *  APEX_STATIC   - explicit frontend directory to serve
- *  APEX_ADMIN_USER / APEX_ADMIN_PASS - operations credentials
+ *  PORT            - HTTP port (Railway injects this)        [3030]
+ *  DATABASE_URL    - postgres://user:pass@host:port/db?sslmode=require
+ *                    (used in preference to PG* vars)
+ *  PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE
+ *  APEX_HOME       - backend working directory               [./backend]
+ *  APEX_STATIC     - frontend directory to serve             [sibling "frontend"]
+ *  APEX_UPLOADS    - upload storage dir                      [APEX_HOME/uploads]
+ *  APEX_ADMIN_USER - seeded admin username                   [admin]
+ *  APEX_ADMIN_PASS - seeded admin password                   [admin1234]
+ *  APEX_SESSION_HOURS - session TTL                          [24]
+ *  APEX_DB_POOL    - connection pool size                    [5]
  */
-public class AppConfig {
+public final class AppConfig {
 
-    private final int port;
-    private final Path home;
-    private final Path dbFile;
-    private final Path staticDir;
-    private final Path seedFile;
-    private final Path uploadsDir;
-    private final String adminUsername;
-    private final String adminPassword;
-    private final String jdbcUrl;
+    public final int port;
+    public final String home;
+    public final String staticDir;
+    public final String uploadsDir;
+    public final String adminUsername;
+    public final String adminPassword;
+    public final int sessionHours;
+    public final int dbPoolSize;
 
-    public AppConfig() {
-        this.port = intEnv("PORT", 3030);
-        this.home = Paths.get(env("APEX_HOME", System.getProperty("apex.home", "."))).toAbsolutePath().normalize();
-        this.dbFile = Paths.get(env("APEX_DB", home.resolve("apex.db").toString())).toAbsolutePath();
-        this.staticDir = Paths.get(env("APEX_STATIC", home.resolveSibling("frontend").toString())).toAbsolutePath().normalize();
-        this.seedFile = home.resolve("seed.json");
-        this.uploadsDir = Paths.get(env("APEX_UPLOADS", home.resolve("uploads").toString())).toAbsolutePath();
-        this.adminUsername = env("APEX_ADMIN_USER", "admin");
-        this.adminPassword = env("APEX_ADMIN_PASS", "admin1234");
-        this.jdbcUrl = resolveJdbcUrl();
+    public final String dbHost;
+    public final int dbPort;
+    public final String dbUser;
+    public final String dbPassword;
+    public final String dbDatabase;
+    public final boolean dbSsl;
+
+    private AppConfig(Builder b) {
+        port = b.port; home = b.home; staticDir = b.staticDir; uploadsDir = b.uploadsDir;
+        adminUsername = b.adminUsername; adminPassword = b.adminPassword;
+        sessionHours = b.sessionHours; dbPoolSize = b.dbPoolSize;
+        dbHost = b.dbHost; dbPort = b.dbPort; dbUser = b.dbUser;
+        dbPassword = b.dbPassword; dbDatabase = b.dbDatabase; dbSsl = b.dbSsl;
     }
 
-    /**
-     * MySQL connection URL, checked in this order:
-     *  1. MYSQL_URL     - Railway MySQL plugin sets this automatically
-     *  2. DATABASE_URL  - Render / Heroku style (must start with mysql://)
-     *  3. MYSQL_HOST / MYSQLHOST (+PORT/DB/USER/PASSWORD, both spellings)
-     * Returns null -> SQLite local file.
-     */
-    private static String resolveJdbcUrl() {
-        String u = firstNonBlank(System.getenv("MYSQL_URL"), System.getenv("DATABASE_URL"));
-        if (u != null && u.startsWith("mysql://")) {
-            String rest = u.substring("mysql://".length());
-            String creds = "", hostdb = rest;
-            if (rest.contains("@")) {
-                creds = rest.substring(0, rest.indexOf('@'));
-                hostdb = rest.substring(rest.indexOf('@') + 1);
-            }
-            String user = creds.contains(":") ? creds.substring(0, creds.indexOf(':')) : creds;
-            String pass = creds.contains(":") ? creds.substring(creds.indexOf(':') + 1) : "";
-            String hostPort = hostdb.contains("/") ? hostdb.substring(0, hostdb.indexOf('/')) : hostdb;
-            String db = hostdb.contains("/") ? hostdb.substring(hostdb.indexOf('/') + 1) : "apex";
-            if (db.contains("?")) db = db.substring(0, db.indexOf('?'));
-            return "jdbc:mysql://" + hostPort + "/" + db + jdbcParams(user, pass);
+    public static AppConfig load() {
+        String url = env("DATABASE_URL");
+        Builder b = new Builder();
+        if (url != null && !url.isBlank()) {
+            parseUrl(url, b);
+        } else {
+            b.dbHost = env("PGHOST") != null ? env("PGHOST") : "localhost";
+            b.dbPort = envInt("PGPORT", 5432);
+            b.dbUser = env("PGUSER") != null ? env("PGUSER") : "apex";
+            b.dbPassword = env("PGPASSWORD") != null ? env("PGPASSWORD") : "";
+            b.dbDatabase = env("PGDATABASE") != null ? env("PGDATABASE") : "apex";
+            String mode = env("PGSSLMODE");
+            b.dbSsl = mode != null && (mode.equals("require") || mode.equals("verify-ca") || mode.equals("verify-full"));
         }
-        String host = firstNonBlank(System.getenv("MYSQL_HOST"), System.getenv("MYSQLHOST"));
-        if (host != null) {
-            String user = firstNonBlank(System.getenv("MYSQL_USER"), System.getenv("MYSQLUSER"), "root");
-            String pass = firstNonBlank(System.getenv("MYSQL_PASSWORD"), System.getenv("MYSQLPASSWORD"), "");
-            return "jdbc:mysql://" + host + ":" + firstNonBlank(System.getenv("MYSQL_PORT"), System.getenv("MYSQLPORT"), "3306")
-                    + "/" + firstNonBlank(System.getenv("MYSQL_DB"), System.getenv("MYSQLDATABASE"), System.getenv("MYSQL_DATABASE"), "apex")
-                    + jdbcParams(user, pass);
-        }
-        return null;
+        return b.build();
     }
 
-    /** True when any MySQL env var is present (so we never silently fall back to SQLite). */
-    public static boolean mysqlConfigured() {
-        String u = firstNonBlank(System.getenv("MYSQL_URL"), System.getenv("DATABASE_URL"));
-        return (u != null && u.startsWith("mysql://"))
-                || firstNonBlank(System.getenv("MYSQL_HOST"), System.getenv("MYSQLHOST")) != null;
-    }
-
-    /**
-     * Connection flags that work against Railway/Render managed MySQL:
-     *  - useSSL defaults to false (managed MySQL is reached over the private
-     *    network; forcing SSL breaks hosts that do not serve it). MYSQL_SSL=true opts in.
-     *  - allowPublicKeyRetrieval=true  -> caching_sha2_password over plain connections
-     *  - characterEncoding=UTF-8       -> Urdu / non-ASCII names survive the round trip
-     */
-    private static String jdbcParams(String user, String pass) {
-        String ssl = env("MYSQL_SSL", "false");
-        return "?user=" + user + "&password=" + pass
-                + "&useSSL=" + ssl
-                + "&allowPublicKeyRetrieval=true"
-                + "&characterEncoding=UTF-8"
-                + "&connectionTimeZone=SERVER";
-    }
-
-    private static String firstNonBlank(String... vals) {
-        for (String v : vals) if (v != null && !v.isBlank()) return v;
-        return null;
-    }
-
-    private static String env(String key, String dflt) {
-        String v = System.getenv(key);
-        return (v == null || v.isBlank()) ? dflt : v;
-    }
-
-    private static int intEnv(String key, int dflt) {
+    private static void parseUrl(String url, Builder b) {
         try {
-            return Integer.parseInt(env(key, String.valueOf(dflt)).trim());
-        } catch (NumberFormatException e) {
-            return dflt;
+            URI u = URI.create(url.trim());
+            String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.ROOT);
+            if (!scheme.equals("postgres") && !scheme.equals("postgresql")) {
+                throw new IllegalArgumentException("Unsupported scheme in DATABASE_URL: " + scheme);
+            }
+            if (u.getHost() != null) b.dbHost = u.getHost();
+            if (u.getPort() > 0) b.dbPort = u.getPort();
+            if (u.getUserInfo() != null) {
+                String[] ui = u.getUserInfo().split(":", 2);
+                if (ui.length == 2) {
+                    b.dbUser = decode(ui[0]);
+                    b.dbPassword = decode(ui[1]);
+                } else {
+                    b.dbUser = decode(ui[0]);
+                }
+            }
+            if (u.getPath() != null && u.getPath().length() > 1) {
+                b.dbDatabase = decode(u.getPath().substring(1));
+            }
+            for (String kv : (u.getQuery() == null ? "" : u.getQuery()).split("&")) {
+                String[] p = kv.split("=", 2);
+                if (p.length == 2 && p[0].equals("sslmode")) {
+                    b.dbSsl = p[1].equals("require") || p[1].equals("verify-ca") || p[1].equals("verify-full");
+                }
+            }
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("Invalid DATABASE_URL: " + e.getMessage(), e);
         }
     }
 
-    public int getPort() { return port; }
-    public Path getHome() { return home; }
-    public Path getDbFile() { return dbFile; }
-    public Path getStaticDir() { return staticDir; }
-    public Path getSeedFile() { return seedFile; }
-    public Path getUploadsDir() { return uploadsDir; }
-    public String getAdminUsername() { return adminUsername; }
-    public String getAdminPassword() { return adminPassword; }
-    public String getJdbcUrl() { return jdbcUrl; }
+    private static String decode(String s) {
+        try {
+            return java.net.URLDecoder.decode(s, "UTF-8");
+        } catch (Exception e) {
+            return s;
+        }
+    }
+
+    public String databaseUrl() {
+        return "postgresql://" + dbUser + ":***@" + dbHost + ":" + dbPort + "/" + dbDatabase + (dbSsl ? "?sslmode=require" : "");
+    }
+
+    private static String env(String k) {
+        String v = System.getenv(k);
+        if (v != null && !v.isBlank()) return v;
+        String p = System.getProperty(k);
+        return (p != null && !p.isBlank()) ? p : null;
+    }
+
+    private static int envInt(String k, int dflt) {
+        String v = env(k);
+        if (v == null) return dflt;
+        try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) { return dflt; }
+    }
+
+    private static final class Builder {
+        int port = envInt("PORT", 3030);
+        String home = env("APEX_HOME") != null ? env("APEX_HOME") : System.getProperty("user.dir");
+        String staticDir;
+        String uploadsDir;
+        String adminUsername = "admin";
+        String adminPassword;
+        int sessionHours = envInt("APEX_SESSION_HOURS", 24);
+        int dbPoolSize = envInt("APEX_DB_POOL", 5);
+        String dbHost = "localhost";
+        int dbPort = 5432;
+        String dbUser = "apex";
+        String dbPassword = "";
+        String dbDatabase = "apex";
+        boolean dbSsl = false;
+
+        Builder() {
+            adminUsername = env("APEX_ADMIN_USER") != null ? env("APEX_ADMIN_USER") : "admin";
+            adminPassword = env("APEX_ADMIN_PASS") != null ? env("APEX_ADMIN_PASS") : "admin1234";
+            staticDir = env("APEX_STATIC") != null ? env("APEX_STATIC") : new java.io.File(home, "../frontend").getAbsolutePath();
+            uploadsDir = env("APEX_UPLOADS") != null ? env("APEX_UPLOADS") : new java.io.File(home, "uploads").getAbsolutePath();
+        }
+
+        AppConfig build() {
+            return new AppConfig(this);
+        }
+    }
 }
