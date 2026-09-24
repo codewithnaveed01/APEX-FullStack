@@ -21,16 +21,17 @@ public class DocumentDao extends BaseDao {
 
     public DocumentDao(Database db) { super(db); }
 
-    public long insert(String ownerType, String ownerId, String kind, String path, String contentType) throws SQLException {
+    public long insert(String ownerType, String ownerId, String kind, String path, String contentType, byte[] content) throws SQLException {
         try (PreparedStatement ps = db.conn().prepareStatement(
-                "INSERT INTO documents(owner_type,owner_id,kind,path,content_type,status,created_at) VALUES (?,?,?,?,?,?,?)")) {
+                "INSERT INTO documents(owner_type,owner_id,kind,path,content_type,content,status,created_at) VALUES (?,?,?,?,?,?,?,?)")) {
             ps.setString(1, ownerType);
             ps.setString(2, ownerId);
             ps.setString(3, kind);
             ps.setString(4, path);
             ps.setString(5, contentType);
-            ps.setString(6, "Pending");
-            ps.setString(7, Instant.now().toString());
+            ps.setBytes(6, content);
+            ps.setString(7, "Pending");
+            ps.setString(8, Instant.now().toString());
             ps.executeUpdate();
         }
         try (Statement st = db.conn().createStatement();
@@ -41,7 +42,7 @@ public class DocumentDao extends BaseDao {
 
     public JsonObject find(long id) throws SQLException {
         try (PreparedStatement ps = db.conn().prepareStatement(
-                "SELECT id,owner_type,owner_id,kind,path,content_type,status,created_at FROM documents WHERE id=?")) {
+                "SELECT id,owner_type,owner_id,kind,path,content_type,content,status,created_at FROM documents WHERE id=?")) {
             ps.setLong(1, id);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return null;
@@ -52,8 +53,12 @@ public class DocumentDao extends BaseDao {
                 o.addProperty("kind", rs.getString(4));
                 o.addProperty("path", rs.getString(5));
                 o.addProperty("contentType", rs.getString(6));
-                o.addProperty("status", rs.getString(7));
-                o.addProperty("created", rs.getString(8));
+                byte[] content = rs.getBytes(7);
+                if (content != null) {
+                    o.addProperty("data", java.util.Base64.getEncoder().encodeToString(content));
+                }
+                o.addProperty("status", rs.getString(8));
+                o.addProperty("created", rs.getString(9));
                 return o;
             }
         }

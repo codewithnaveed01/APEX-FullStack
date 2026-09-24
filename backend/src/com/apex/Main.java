@@ -70,9 +70,16 @@ public class Main {
                 documentDao, reviewDao, notificationDao, cfg);
 
         HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", cfg.getPort()), 0);
+        final Database dbLock = db;
         server.createContext("/api/", ex -> {
-            if (!router.handle(ex)) {
-                com.apex.web.HttpUtil.sendError(ex, 404, "No such API route");
+            // One shared JDBC connection: serialize ALL database work here so two
+            // requests can never interleave statements or transactions on it.
+            synchronized (dbLock) {
+                try {
+                    if (!router.handle(ex)) {
+                        com.apex.web.HttpUtil.sendError(ex, 404, "No such API route");
+                    }
+                } catch (java.io.IOException ignored) { }
             }
         });
         server.createContext("/", new StaticHandler(cfg.getStaticDir()));
@@ -84,7 +91,12 @@ public class Main {
         System.out.println("   URL     : http://localhost:" + cfg.getPort() + "/");
         System.out.println("   Admin   : http://localhost:" + cfg.getPort() + "/admin.html");
         System.out.println("   API     : http://localhost:" + cfg.getPort() + "/api/health");
-        System.out.println("   DB file : " + cfg.getDbFile());
+        String jdbc = cfg.getJdbcUrl();
+        if (jdbc != null) {
+            System.out.println("   Database: MySQL " + jdbc.replaceAll("password=[^&]*", "password=***"));
+        } else {
+            System.out.println("   DB file : " + cfg.getDbFile());
+        }
         System.out.println("   Static  : " + cfg.getStaticDir());
         System.out.println("=====================================================");
     }

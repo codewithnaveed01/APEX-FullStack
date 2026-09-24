@@ -216,14 +216,29 @@ public class StateService {
     /* ------------------------------------------------ first-run seed */
 
     public void seedIfEmpty(Path seedFile) throws SQLException, IOException {
-        boolean empty = db.with(c -> cars.all().isEmpty() && settings.get("config") == null);
-        if (!empty) return;
+        boolean noCars = db.with(c -> cars.all().isEmpty());
+        if (!noCars) return;                       // catalog already present
         JsonObject seed = null;
         if (seedFile != null && Files.exists(seedFile)) {
             seed = Json.parseObject(Files.readString(seedFile));
+        } else {
+            System.out.println("[APEX] WARNING: seed file not found at " + seedFile
+                    + " - fleet will stay EMPTY until you add cars in the admin panel");
         }
         if (seed == null) seed = Json.obj();
-        sync(seed);
+        boolean fresh = db.with(c -> settings.get("config") == null);
+        if (fresh) {
+            sync(seed);                            // full first-run seed
+        } else {
+            // config exists but fleet is empty (e.g. MySQL switched on later):
+            // seed ONLY fleet + drivers, never touch existing users/orders/config
+            final JsonObject f = seed;
+            db.tx(c -> {
+                cars.replace(objectList(f, "fleet"));
+                drivers.replace(objectList(f, "drivers"));
+                return null;
+            });
+        }
     }
 
     /* ------------------------------------------------ single-row patches + crud */

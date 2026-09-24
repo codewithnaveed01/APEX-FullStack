@@ -38,12 +38,14 @@ public class AppConfig {
     }
 
     /**
-     * MySQL via Railway/Render style DATABASE_URL (mysql://user:pass@host:port/db)
-     * or explicit MYSQL_HOST/MYSQL_PORT/MYSQL_DB/MYSQL_USER/MYSQL_PASSWORD.
+     * MySQL connection URL, checked in this order:
+     *  1. MYSQL_URL     - Railway MySQL plugin sets this automatically
+     *  2. DATABASE_URL  - Render / Heroku style (must start with mysql://)
+     *  3. MYSQL_HOST / MYSQLHOST (+PORT/DB/USER/PASSWORD, both spellings)
      * Returns null -> SQLite local file.
      */
     private static String resolveJdbcUrl() {
-        String u = System.getenv("DATABASE_URL");
+        String u = firstNonBlank(System.getenv("MYSQL_URL"), System.getenv("DATABASE_URL"));
         if (u != null && u.startsWith("mysql://")) {
             String rest = u.substring("mysql://".length());
             String creds = "", hostdb = rest;
@@ -55,16 +57,45 @@ public class AppConfig {
             String pass = creds.contains(":") ? creds.substring(creds.indexOf(':') + 1) : "";
             String hostPort = hostdb.contains("/") ? hostdb.substring(0, hostdb.indexOf('/')) : hostdb;
             String db = hostdb.contains("/") ? hostdb.substring(hostdb.indexOf('/') + 1) : "apex";
-            return "jdbc:mysql://" + hostPort + "/" + db
-                    + "?user=" + user + "&password=" + pass
-                    + "&useSSL=true&serverTimezone=UTC&connectionTimeZone=SERVER";
+            if (db.contains("?")) db = db.substring(0, db.indexOf('?'));
+            return "jdbc:mysql://" + hostPort + "/" + db + jdbcParams(user, pass);
         }
-        String host = System.getenv("MYSQL_HOST");
-        if (host != null && !host.isBlank()) {
-            return "jdbc:mysql://" + host + ":" + env("MYSQL_PORT", "3306") + "/" + env("MYSQL_DB", "apex")
-                    + "?user=" + env("MYSQL_USER", "root") + "&password=" + env("MYSQL_PASSWORD", "")
-                    + "&useSSL=true&serverTimezone=UTC&connectionTimeZone=SERVER";
+        String host = firstNonBlank(System.getenv("MYSQL_HOST"), System.getenv("MYSQLHOST"));
+        if (host != null) {
+            String user = firstNonBlank(System.getenv("MYSQL_USER"), System.getenv("MYSQLUSER"), "root");
+            String pass = firstNonBlank(System.getenv("MYSQL_PASSWORD"), System.getenv("MYSQLPASSWORD"), "");
+            return "jdbc:mysql://" + host + ":" + firstNonBlank(System.getenv("MYSQL_PORT"), System.getenv("MYSQLPORT"), "3306")
+                    + "/" + firstNonBlank(System.getenv("MYSQL_DB"), System.getenv("MYSQLDATABASE"), System.getenv("MYSQL_DATABASE"), "apex")
+                    + jdbcParams(user, pass);
         }
+        return null;
+    }
+
+    /** True when any MySQL env var is present (so we never silently fall back to SQLite). */
+    public static boolean mysqlConfigured() {
+        String u = firstNonBlank(System.getenv("MYSQL_URL"), System.getenv("DATABASE_URL"));
+        return (u != null && u.startsWith("mysql://"))
+                || firstNonBlank(System.getenv("MYSQL_HOST"), System.getenv("MYSQLHOST")) != null;
+    }
+
+    /**
+     * Connection flags that work against Railway/Render managed MySQL:
+     *  - useSSL defaults to false (managed MySQL is reached over the private
+     *    network; forcing SSL breaks hosts that do not serve it). MYSQL_SSL=true opts in.
+     *  - allowPublicKeyRetrieval=true  -> caching_sha2_password over plain connections
+     *  - characterEncoding=UTF-8       -> Urdu / non-ASCII names survive the round trip
+     */
+    private static String jdbcParams(String user, String pass) {
+        String ssl = env("MYSQL_SSL", "false");
+        return "?user=" + user + "&password=" + pass
+                + "&useSSL=" + ssl
+                + "&allowPublicKeyRetrieval=true"
+                + "&characterEncoding=UTF-8"
+                + "&connectionTimeZone=SERVER";
+    }
+
+    private static String firstNonBlank(String... vals) {
+        for (String v : vals) if (v != null && !v.isBlank()) return v;
         return null;
     }
 

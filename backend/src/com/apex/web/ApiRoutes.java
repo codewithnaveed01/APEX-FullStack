@@ -306,7 +306,7 @@ public class ApiRoutes {
             Files.createDirectories(dir);
             String fname = UUID.randomUUID().toString().replace("-", "") + "." + ext;
             Files.write(dir.resolve(fname), bytes);
-            long docId = docDao.insert(ownerType, ownerId, kind, fname, "image/" + ext);
+            long docId = docDao.insert(ownerType, ownerId, kind, fname, "image/" + ext, bytes);
             JsonObject out = Json.obj();
             out.addProperty("id", docId);
             out.addProperty("kind", kind);
@@ -329,7 +329,16 @@ public class ApiRoutes {
             if (doc == null) throw new IllegalArgumentException("Document not found");
             if (!ctx.isAdmin() && !ctx.userId().equals(Json.str(doc, "ownerId")))
                 throw new IllegalArgumentException("You do not have access to this document");
-            byte[] bytes = Files.readAllBytes(cfg.getUploadsDir().resolve(Json.str(doc, "path")));
+            byte[] bytes;
+            try {
+                bytes = Files.readAllBytes(cfg.getUploadsDir().resolve(Json.str(doc, "path")));
+            } catch (java.io.IOException missing) {
+                // file gone (deploy disk wiped) -> serve the DB copy instead
+                String dbCopy = Json.str(doc, "data");
+                if (dbCopy == null || dbCopy.isEmpty())
+                    throw new IllegalArgumentException("Document file is missing and no DB copy exists - please re-upload");
+                bytes = Base64.getDecoder().decode(dbCopy);
+            }
             JsonObject out = Json.obj();
             out.addProperty("id", id);
             out.addProperty("kind", Json.str(doc, "kind"));
