@@ -9,11 +9,12 @@ COPY backend /app/backend
 RUN cd /app/backend && mkdir -p out && javac -encoding UTF-8 -cp "lib/*" -d out $(find src -name "*.java")
 
 FROM eclipse-temurin:11-jre
-WORKDIR /app
+WORKDIR /app/backend
 COPY --from=build /app/backend/out /app/backend/out
 COPY --from=build /app/backend/lib /app/backend/lib
 COPY --from=build /app/backend/seed.json /app/backend/seed.json
+RUN mkdir -p /app/backend/uploads
 COPY frontend /app/frontend
 ENV PORT=3030 APEX_HOME=/app/backend
 EXPOSE 3030
-CMD ["java", "-cp", "out:lib/*", "com.apex.Main"]
+CMD ["java", "-cp", "/app/backend/out:/app/backend/lib/*", "com.apex.Main"]
