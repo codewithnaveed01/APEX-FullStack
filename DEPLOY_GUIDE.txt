@@ -1,0 +1,75 @@
+APEX FULL-STACK - DEPLOY GUIDE
+==============================
+
+OPTION 0 - RENDER (one-click, recommended for online deploy)
+------------------------------------------------------------
+  1) Ye folder GitHub repo me push karein.
+  2) Render.com -> New + -> Blueprint -> repo select -> ye render.yaml detect hogi.
+  3) Deploy click karein. App Docker image build kar ke chalay ga.
+  4) Deploy ke baad Dashboard -> Env se APEX_ADMIN_PASS apna strong password set karein.
+  5) URL: https://<service>.onrender.com  (health: /api/health)
+  Note: free plan par SQLite container ke andar hai (redeploy par reset);
+        persistent storage ke liye plan upgrade kar ke disk attach karein.
+
+OPTION 1 - DOCKER (recommended, any host with Docker)
+-----------------------------------------------------
+  docker build -t apex-fullstack .
+  docker run -d -p 3030:3030 -v apex-data:/app/backend --name apex apex-fullstack
+  (volume apex-data me apex.db persist hota hai)
+
+OPTION 2 - VPS (Ubuntu/Debian) + systemd
+----------------------------------------
+1) Upload:  scp APEX-FullStack.zip user@server:
+2) Server par:
+     sudo apt update && sudo apt install -y openjdk-11-jdk unzip
+     unzip APEX-FullStack.zip && cd APEX-FullStack/backend
+     ./build.sh
+3) Service file:  sudo nano /etc/systemd/system/apex.service
+     [Unit]
+     Description=APEX full-stack
+     After=network.target
+     [Service]
+     WorkingDirectory=/home/user/APEX-FullStack/backend
+     Environment=PORT=8080
+     Environment=APEX_ADMIN_USER=admin
+     Environment=APEX_ADMIN_PASS=CHANGE_ME
+     ExecStart=/usr/bin/java -Dapex.home=/home/user/APEX-FullStack/backend -cp out:lib/* com.apex.Main
+     Restart=always
+     [Install]
+     WantedBy=multi-user.target
+4) sudo systemctl daemon-reload && sudo systemctl enable --now apex
+5) (Optional) Nginx reverse proxy + HTTPS:
+     server { listen 80; server_name apex.example.com;
+       location / { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; } }
+
+OPTION 3 - Render / Railway / any container PaaS
+------------------------------------------------
+  Build: Dockerfile auto-detect. Env: PORT, APEX_ADMIN_PASS.
+  Note: persistent disk attach karen taake apex.db survive kare.
+
+OPTION 4 - Shared hosting (static only, no Java)
+------------------------------------------------
+  Ye zip full-stack hai; pure static hosting par backend nahi chalega.
+  Static demo ke liye original single-file previews (Apex-*-Preview.html)
+  alag rakhein - wo bina server ke chalti hain.
+
+OPTION 5 - RAILWAY (MySQL database ke sath)
+-------------------------------------------
+  1) Railway par New Project -> "Deploy from GitHub repo" (ye folder push karein).
+  2) Railway MySQL add karein: New -> Database -> MySQL.
+  3) Web service ke Variables me MySQL service ka private URL add karein:
+       DATABASE_URL = mysql://user:password@host:port/railwaydb
+     (MySQL service -> Connect -> "Private SQL URL" copy karein, scheme mysql://)
+  4) APEX_ADMIN_PASS apna strong password set karein. Start command:
+       bash backend/run.sh     (ya:  cd backend && bash run.sh)
+     Build command:  cd backend && bash build.sh
+  5) Deploy ke baad Railway MySQL dashboard ("Data" tab) me sare tables nazar
+     aayenge: cars, bookings, booking_items, users, payments, documents,
+     reviews, wallet, wallet_transactions, sessions, settings, drivers,
+     owner_applications, notifications, chats, banned_cnic, owner_wallets.
+  App DATABASE_URL dekhte hi SQLite ki jagah MySQL use kerta hai.
+
+CHECK AFTER DEPLOY
+------------------
+  curl https://your-host/api/health        -> {"ok":true,...}
+  https://your-host/admin.html             -> admin login

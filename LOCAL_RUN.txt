@@ -1,0 +1,19 @@
+APEX FULL-STACK - LOCAL RUN (laptop)
+====================================
+Requirement: JDK 11+ (https://adoptium.net) - sirf Java, aur kuch nahi.
+
+Linux / Mac:
+  cd backend
+  ./run.sh
+Windows:
+  cd backend
+  run.bat
+
+Browser (default port 3030):
+  Website : http://localhost:3030/
+  Admin   : http://localhost:3030/admin.html   (admin / admin1234)
+  API     : http://localhost:3030/api/health
+
+Port change:  PORT=9000 ./run.sh   (Windows: set PORT=9000 && run.bat)
+DB file     : backend/apex.db (first run par auto-create + 13 cars seed)
+Reset DB    : server band kar ke backend/apex.db delete karen, dobara start.
