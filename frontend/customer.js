@@ -765,10 +765,55 @@ function apexAdminLogin(u,p){
       if(d&&d.token){__apexToken=d.token;write('apiToken',__apexToken);v3RefreshBootstrap();}
     }).catch(()=>{});
 }
+/* Server-authoritative union: this browser's rows win per id (newest local
+   edits), but rows that exist on the SERVER and not in this browser (new
+   registrations / bookings / payments made on another device while this page
+   was open) are KEPT — a stale browser can no longer wipe them. */
+function apexMergeById(serverList,localList){
+  const out=[...(localList||[])];
+  const ids=new Set(out.map(x=>x&&(x.id!==undefined?String(x.id):'')).filter(Boolean));
+  for(const row of (serverList||[])){
+    if(!row)continue;
+    const rid=row.id!==undefined?String(row.id):'';
+    if(rid&&ids.has(rid))continue;
+    out.push(row);
+  }
+  return out;
+}
+function apexSyncBanner(msg,show){
+  let el=document.getElementById('apex-sync-banner');
+  if(show){
+    if(!el){el=document.createElement('div');el.id='apex-sync-banner';el.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:99999;background:#b3261e;color:#fff;padding:12px 18px;border-radius:10px;max-width:90vw;font-size:14px;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,.35)';document.body.appendChild(el);}
+    el.textContent=msg;el.style.display='block';
+  }else if(el){el.style.display='none';}
+}
 function apexPushNow(){
   if(!v3Online()||!__apexToken)return;
   if(!isAdminAuthenticated())return;               // customers sync via dedicated APIs, never full-state push
-  fetch('/api/sync',{method:'PUT',headers:apexHeaders(true),body:JSON.stringify({fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,adminWallet,ownerWallets,config})}).then(r=>{if(r.status===401)apexClearToken();}).catch(()=>{});
+  const doPush=body=>fetch('/api/sync',{method:'PUT',headers:apexHeaders(true),body:JSON.stringify(body)})
+    .then(r=>{
+      if(r.status===401){apexClearToken();apexSyncBanner('Server session expired — sign in again as admin to save changes.',true);return;}
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      apexSyncBanner('',false);
+    })
+    .catch(e=>{console.error('APEX sync failed:',e);apexSyncBanner('⚠ Server save FAILED — latest changes are NOT saved ('+(e.message||e)+'). Retry: make any small edit after the deploy is healthy.',true);});
+  // Pull the FRESHEST server state first, merge, then push.
+  fetch('/api/bootstrap',{headers:apexHeaders(true)}).then(r=>r.ok?r.json():null)
+    .then(latest=>{
+      const body={fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,config};
+      if(latest){
+        body.users=apexMergeById(latest.users,users);
+        body.orders=apexMergeById(latest.orders,orders);
+        body.applications=apexMergeById(latest.applications,applications);
+        body.notifications=apexMergeById(latest.notifications,notifications);
+        body.chats=apexMergeById(latest.chats,chats);
+      }
+      // Wallets are server-authoritative now (v3 payment/wallet endpoints
+      // update them directly) — NOT pushed here, so a stale browser can
+      // never reset the balance.
+      doPush(body);
+    })
+    .catch(()=>doPush({fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,config}));
 }
 function v3RefreshBootstrap(){
   if(!v3Online())return;

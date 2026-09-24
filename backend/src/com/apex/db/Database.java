@@ -138,6 +138,26 @@ public class Database implements AutoCloseable {
             }
             // v3 upgrade: documents store file bytes in the DB (deploy disk is ephemeral)
             try { st.execute("ALTER TABLE documents ADD COLUMN content " + (mysql ? "MEDIUMBLOB" : "BLOB")); } catch (SQLException ignored) { }
+            // v4 upgrade (existing MySQL DBs from EARLIER deploys): widen text columns.
+            // Earlier deploys created them as TEXT (64KB limit). Car JSONs with
+            // base64 photos exceed 64KB -> every full-state sync failed with
+            // "Data too long for column json" and the admin's save was LOST.
+            if (mysql) {
+                String[] widen = {
+                    "ALTER TABLE cars MODIFY COLUMN json MEDIUMTEXT",
+                    "ALTER TABLE drivers MODIFY COLUMN json MEDIUMTEXT",
+                    "ALTER TABLE users MODIFY COLUMN json MEDIUMTEXT",
+                    "ALTER TABLE bookings MODIFY COLUMN json MEDIUMTEXT",
+                    "ALTER TABLE booking_items MODIFY COLUMN json MEDIUMTEXT",
+                    "ALTER TABLE owner_applications MODIFY COLUMN json MEDIUMTEXT",
+                    "ALTER TABLE notifications MODIFY COLUMN msg MEDIUMTEXT",
+                    "ALTER TABLE chats MODIFY COLUMN json MEDIUMTEXT",
+                    "ALTER TABLE wallet_transactions MODIFY COLUMN note MEDIUMTEXT",
+                    "ALTER TABLE settings MODIFY COLUMN value MEDIUMTEXT",
+                    "ALTER TABLE reviews MODIFY COLUMN body MEDIUMTEXT"
+                };
+                for (String sql : widen) { try { st.execute(sql); } catch (SQLException ignored) { } }
+            }
         }
     }
 
