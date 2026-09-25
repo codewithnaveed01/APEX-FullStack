@@ -242,13 +242,14 @@ details p{font-size:12px;color:var(--muted);margin-top:14px;margin-bottom:0}
 .mybooking{margin-bottom:18px}
 .booking-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
 .booking-top h3{margin:0;font-size:17px}
-.modal-bg{position:fixed;inset:0;background:rgba(20,24,18,.48);backdrop-filter:blur(10px);z-index:100;display:grid;place-items:center;padding:20px}
-.modal{background:#fff;border:1px solid var(--line);border-radius:18px;padding:28px;width:560px;max-width:100%;max-height:90vh;overflow:auto;box-shadow:var(--depth-3)}
+.modal-bg{position:fixed;inset:0;background:rgba(20,24,18,.48);backdrop-filter:blur(10px);z-index:100;display:grid;grid-template-columns:minmax(0,1fr);place-items:center;padding:20px}
+.modal{background:#fff;border:1px solid var(--line);border-radius:18px;padding:28px;width:560px;max-width:100%;min-width:0;max-height:90vh;overflow:auto;box-shadow:var(--depth-3)}
 .modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:14px}
 .modal-head h2{font-size:22px;margin:0;color:var(--text)}
 .close{font-size:24px;color:var(--muted);width:32px;height:32px;display:grid;place-items:center;border-radius:50%;transition:all .2s}
 .close:hover{background:var(--bg-2);color:var(--text)}
-.modal.large{width:1080px}
+.modal.large{width:min(1080px,100%)}
+@media(max-width:600px){.modal-bg{padding:12px}.modal,.modal.large{width:100%;max-height:calc(100dvh - 24px)}.modal input[type=file]{min-width:0;max-width:100%}}
 .lightbox-image{width:100%;max-height:70vh;object-fit:contain;border-radius:12px}
 .lightbox-footer{display:flex;justify-content:space-between;gap:14px;margin-top:16px;font-size:12px;color:var(--muted)}
 #toast{position:fixed;bottom:24px;left:50%;transform:translate(-50%,16px);opacity:0;pointer-events:none;padding:14px 22px;border-radius:100px;background:var(--text);color:#fff;z-index:200;transition:all .4s var(--ease-hayler);box-shadow:var(--depth-3);font-size:12px;max-width:90vw;width:max-content;font-weight:500}
@@ -369,7 +370,7 @@ h1,h2,h3,.logo{font-family:Manrope,Arial,sans-serif}
 .topline{display:none!important}
 /* hero text always readable on dark imagery */
 .v3-hero::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,rgba(10,14,8,.62) 0%,rgba(10,14,8,.30) 55%,rgba(10,14,8,.05) 100%);pointer-events:none}
-.v3-hero .hero-copy{position:relative;z-index:2}
+.v3-hero .hero-copy{position:relative;z-index:2;top:clamp(18px,2.3vw,32px)}
 .v3-hero .hero-copy .eyebrow,.v3-hero .hero-copy p{color:#f3f1e9;text-shadow:0 2px 10px rgba(0,0,0,.55)}
 .v3-hero h1{color:#ffffff;text-shadow:0 3px 16px rgba(0,0,0,.6)}
 .v3-hero h1 em{color:var(--lime-bright)}
@@ -395,19 +396,39 @@ img{max-width:100%}
 @media(max-width:760px){.car-price{flex-direction:column}.car-price .btn{width:100%}.admin-stats{grid-template-columns:1fr 1fr}}
 @media(max-width:480px){.admin-stats{grid-template-columns:1fr}}
 
+/* A slim, continuously moving ribbon beneath the search form. */
+.trust{display:flex;align-items:center;height:42px;margin-top:14px;overflow:hidden;position:relative;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--panel);color:var(--muted)}
+.trust::before,.trust::after{content:'';position:absolute;top:0;bottom:0;width:48px;z-index:1;pointer-events:none}
+.trust::before{left:0;background:linear-gradient(90deg,var(--panel),transparent)}
+.trust::after{right:0;background:linear-gradient(270deg,var(--panel),transparent)}
+.trust-track{display:flex;width:max-content;animation:apexMarquee 38s linear infinite}
+.trust-group{display:flex;align-items:center;flex:none;gap:48px;padding-right:48px}
+.trust span{white-space:nowrap;display:flex;align-items:center;font-size:10px;font-weight:600;letter-spacing:.25px}
+.trust span::before{content:'✦';color:var(--lime);margin-right:11px;font-size:9px}
+@keyframes apexMarquee{to{transform:translateX(-50%)}}
+@media(max-width:760px){.v3-hero .hero-copy{top:20px}.trust{height:38px;margin-top:10px}.trust-group{gap:36px;padding-right:36px}}
+@media(prefers-reduced-motion:reduce){.trust-track{animation:none}}
+
 /* Refined catalogue: equal-height cards and uncropped vehicle photography. */
 .cars{grid-auto-rows:1fr;align-items:stretch;gap:20px}
 .cars .car{display:flex;flex-direction:column;min-width:0}
 .car-photo{display:block;flex:none;height:auto!important;aspect-ratio:16/10;background:#f4f4f0}
-.car-photo img{position:absolute;inset:14px;width:calc(100% - 28px);height:calc(100% - 28px);object-fit:contain;object-position:center;filter:none;transform:none!important;transition:none;will-change:auto;background:transparent}
+.car-photo img{position:absolute;inset:18px;width:calc(100% - 36px);height:calc(100% - 36px);object-fit:contain;object-position:center;filter:none;transform:none;transition:transform .65s var(--ease-smooth);background:transparent}
 .car:hover .car-photo img{filter:none;transform:none}
+@media(hover:hover) and (pointer:fine){body:not(.page-admin) .cars .car:hover .car-photo img,body:not(.page-admin) .cars .car:focus-within .car-photo img{transform:scale(1.045)}}
+@media(min-width:761px) and (max-width:980px){body:not(.page-admin) .cars{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:481px) and (max-width:1100px){body.page-admin .admin-workspace .cars{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:481px) and (max-width:1150px){body.page-admin .admin-workspace .driver-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .car-photo::after,.photo-arrow{display:none}
 .car-body{flex:1;display:flex;flex-direction:column;gap:10px;min-height:99px;padding:16px 20px 19px;transition:none}
 .car:hover .car-body{transform:none}
 .car h3{font-size:16px;line-height:1.35;min-height:2.7em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.car-rent{margin-top:auto;display:flex;align-items:baseline;gap:5px}
+.car-rent{margin-top:auto;display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:5px 10px}
+.car-daily{display:flex;align-items:baseline;gap:4px;white-space:nowrap}
 .car-rent strong{font-size:16px;letter-spacing:-.2px}
 .car-rent span{font-size:11px;color:var(--muted)}
+.car-hourly{font-size:11px;color:var(--muted);white-space:nowrap;font-weight:500}
+.section-intro{max-width:36em;line-height:1.5}
 .car-status.pill{top:12px;left:12px;background:#ebf3e6;color:#284f32;border:1px solid #d4e4cd;box-shadow:none;backdrop-filter:none;font-size:10px}
 .car-status.pill.is-rented{background:#fff1eb;color:#914a2e;border-color:#efd4c7}
 .car:hover .car-status{transform:none}

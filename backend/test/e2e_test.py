@@ -95,6 +95,8 @@ s, b = req("GET", "/api/notifications", token=cust)
 check("customer on admin endpoint 403", s == 403, f"{s}")
 
 print("== 3. Bootstrap ==")
+s, seeded_drivers = req("GET", "/api/drivers")
+check("seven seeded drivers", s == 200 and [d.get("id") for d in seeded_drivers] == list(range(1, 8)), f"{s} {seeded_drivers}")
 s, b = req("GET", "/api/bootstrap")
 check("public bootstrap fleet", s == 200 and len(b.get("fleet", [])) == 13, f"{s} fleet={len(b.get('fleet', [])) if isinstance(b, dict) else b}")
 check("public bootstrap config", isinstance(b.get("config"), dict) and b["config"].get("driverRate", 0) > 0, f"{b.get('config') if isinstance(b, dict) else b}")
@@ -537,6 +539,51 @@ for endpoint, label, token in [
     check(label + " has its own bounded polling quota", failed_at is None, f"first failure: {failed_at}")
 status, _ = req("GET", "/api/settings")
 check("ordinary API quota remains available after polling", status == 200, f"{status}")
+
+print("== 19. Walk-in booking requires private CNIC front and back ==")
+walkin_id = "guest-e2e-" + uuid.uuid4().hex[:8]
+w1 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 55))
+w2 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 56))
+walkin_extra = {"manual": True, "userId": walkin_id, "status": "Confirmed",
+                "identityStatus": "Verified", "paid": 0, "payment": "Cash on pickup"}
+walkin_car = fleet[8]["id"]
+s, b = mk_order([walkin_car], w1, w2, admin, extra=walkin_extra)
+check("walk-in without CNIC photos rejected", s == 422 and "CNIC" in b.get("error", ""), f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, cust, extra=walkin_extra)
+check("customer cannot bypass walk-in documents", s == 403, f"{s} {b}")
+front_status, front = req("POST", "/api/uploads", {
+    "dataUrl": data_url, "kind": "cnic_front", "ownerType": "user", "ownerId": walkin_id}, admin)
+back_status, back = req("POST", "/api/uploads", {
+    "dataUrl": data_url, "kind": "cnic_back", "ownerType": "user", "ownerId": walkin_id}, admin)
+check("admin uploaded both private CNIC photos", front_status == back_status == 201 and front.get("id") != back.get("id"), f"{front_status} {back_status}")
+front_id, back_id = front.get("id"), back.get("id")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id, front_id]})
+check("walk-in cannot use two front photos", s == 422, f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id]})
+check("walk-in cannot use one photo", s == 422, f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "userId": "guest-other", "identityDocs": [front_id, back_id]})
+check("walk-in cannot attach another customer's CNIC", s == 422, f"{s} {b}")
+s, walkin = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id, back_id]})
+check("walk-in with both CNIC photos saved", s == 201 and walkin.get("manual") is True and walkin.get("identityDocs") == [front_id, back_id], f"{s} {walkin}")
+check("walk-in CNIC not auto-verified", walkin.get("identityStatus") == "Pending" and walkin.get("status") == "Confirmed", f"{walkin}")
+walkin_booking_id = walkin.get("id")
+s, saved_walkin = req("GET", f"/api/orders/{walkin_booking_id}", token=admin)
+check("walk-in photos linked after reload", s == 200 and saved_walkin.get("identityDocs") == [front_id, back_id], f"{s} {saved_walkin}")
+s, b = req("GET", f"/api/documents/{back_id}", token=admin)
+check("admin can view walk-in CNIC image", s == 200 and b.get("dataUrl", "").startswith("data:image/png;base64,"), f"{s}")
+s, b = req("GET", f"/api/documents/{front_id}", token=cust)
+check("unrelated customer cannot view walk-in CNIC", s == 403, f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id, back_id]})
+check("walk-in reservation respects booked dates", s == 409, f"{s} {b}")
+same_day = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 60))
+hourly_item = {"carId": walkin_car, "start": same_day, "end": same_day,
+               "startDt": same_day + "T10:00", "endDt": same_day + "T18:00",
+               "city": "Lahore", "service": "Self-drive"}
+s, hourly = mk_order([walkin_car], same_day, same_day, admin, extra={
+    **walkin_extra, "identityDocs": [front_id, back_id], "items": [hourly_item]})
+check("same-day walk-in uses real hourly window", s == 201 and
+      hourly.get("items", [{}])[0].get("price", {}).get("hours") == 8,
+      f"{s} {hourly}")
 
 print()
 print(f"===== RESULTS: {PASS} passed, {FAIL} failed =====")

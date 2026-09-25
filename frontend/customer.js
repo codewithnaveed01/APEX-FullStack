@@ -44,7 +44,7 @@ let fleet=read('fleet',defaultFleet);
 // An empty/short catalog can be intentional (or an unsaved admin edit).
 // Do not silently re-add deleted cars from defaults on a refresh.
 if(!Array.isArray(fleet)){fleet=defaultFleet;write('fleet',fleet);}
-let drivers=read('drivers',[{id:1,name:'Ali Raza',phone:'+92 300 0000101',city:'Lahore',experience:8,license:'LHR-xxx102',active:true},{id:2,name:'Imran Shah',phone:'+92 300 0000102',city:'Islamabad',experience:11,license:'ISB-xxx209',active:true},{id:3,name:'Bilal Ahmed',phone:'+92 300 0000103',city:'Karachi',experience:6,license:'KHI-xxx311',active:false}]);
+let drivers=read('drivers',[{id:1,name:'Ali Raza',phone:'+92 300 0000101',city:'Lahore',experience:8,license:'LHR-xxx102',active:true},{id:2,name:'Imran Shah',phone:'+92 300 0000102',city:'Islamabad',experience:11,license:'ISB-xxx209',active:true},{id:3,name:'Bilal Ahmed',phone:'+92 300 0000103',city:'Karachi',experience:6,license:'KHI-xxx311',active:false},{id:4,name:'Farhan Malik',phone:'+92 300 0000104',city:'Rawalpindi',experience:7,license:'RWP-xxx412',active:true},{id:5,name:'Hamza Khan',phone:'+92 300 0000105',city:'Lahore',experience:5,license:'LHR-xxx527',active:true},{id:6,name:'Asad Mahmood',phone:'+92 300 0000106',city:'Faisalabad',experience:9,license:'FSD-xxx639',active:true},{id:7,name:'Danish Iqbal',phone:'+92 300 0000107',city:'Islamabad',experience:6,license:'ISB-xxx746',active:true}]);
 let orders=read('orders',[]),applications=read('applications',[]),account=read('session',null),cart=read('cart',[]);
 let users=read('users',[]);
 let notifications=read('notifications',[]);
@@ -576,8 +576,89 @@ async function confirmCancel(id){const o=orders.find(x=>x.id===id);if(!o)return;
   persist();closeModal();render();toast('Cancelled — 5% fee '+money(fee)+' to admin wallet');}
 function banCNIC(cnic){if(!cnic) return; if(!bannedCNICs.includes(cnic)){bannedCNICs.push(cnic); persist(); toast('CNIC '+cnic+' banned'); render();}}
 function unbanCNIC(cnic){bannedCNICs=bannedCNICs.filter(x=>x!==cnic); persist(); toast('CNIC '+cnic+' unbanned'); render();}
-function adminManualBooking(){modal('Walk-in booking', `<form onsubmit="submitManualBooking(event)"><div class="formgrid"><div class="field"><label>Customer ID (existing or blank for guest)</label><input name="userId" placeholder="Existing user ID or blank"></div><div class="field"><label>Customer full name</label><input name="name" required></div><div class="field"><label>Phone</label><input name="phone" required></div><div class="field"><label>Email</label><input type="email" name="email" required></div><div class="field"><label>CNIC (13 digits)</label><input name="identity" pattern="[0-9]{13}" required placeholder="0000000000000"></div><div class="field"><label>Car ID</label><select name="carId" required>${fleet.map(c=>`<option value="${c.id}">${c.id} — ${esc(c.name)} — ${money(c.rate)}/day</option>`).join('')}</select></div><div class="field"><label>Start date</label><input type="date" name="start" required min="${TODAY}"></div><div class="field"><label>End date</label><input type="date" name="end" required min="${TODAY}"></div><div class="field"><label>City</label><select name="city">${cities('Lahore')}</select></div><div class="field"><label>Service</label><select name="service"><option>Self-drive</option><option>With driver</option></select></div><div class="field"><label>Pickup mode</label><select name="pickupMode"><option>Office pickup</option><option>Home delivery</option></select></div><div class="field"><label>Payment method</label><select name="payment"><option>Cash on pickup</option><option>JazzCash</option><option>easypaisa</option><option>Raast / bank transfer</option></select></div><div class="field"><label>Paid amount</label><input type="number" name="paid" value="0"></div></div><button class="btn full" style="margin-top:14px">Create manual booking ↗</button></form>`, true);}
-function submitManualBooking(e){e.preventDefault();const f=Object.fromEntries(new FormData(e.target)); if(bannedCNICs.includes(f.identity)){toast('CNIC banned — cannot book'); return;} const car=carBy(f.carId); if(!car){toast('Car not found'); return;} if(clash(car.id,f.start,f.end)){toast('Car not available for these dates — already rented'); return;} const item={carId:+f.carId,start:f.start,end:f.end,city:f.city,service:f.service,driverRate:config.driverRate}; const q=quote(item); const homeCharge=f.pickupMode==='Home delivery'?config.homeDeliveryCharge:0; const total={...totals([item]), homeDelivery:homeCharge, total:totals([item]).total+homeCharge}; const id='VR-MANUAL-'+Date.now().toString().slice(-5); const o={id,userId:f.userId||'guest-'+Date.now(),name:f.name,email:f.email,phone:f.phone,destination:f.city,pickupMode:f.pickupMode,homeAddress:'',officeAddress:config.officeAddress,identity:f.identity,identityMasked:'xxxxx',identityStatus:'Verified',items:[{...item,price:q}],totals:total,payment:f.payment,status:'Confirmed',paid:+f.paid||0,depositPaid:0,created:new Date().toISOString(),cancellationFee:0,ownerPayoutDone:false,manual:true}; orders.unshift(o); if(f.payment!=='Cash on pickup' || +f.paid>0){const payAmt=(+f.paid||total.rental+homeCharge);adminWallet+=payAmt;apexRecordPayment(payAmt,'payment',id+' · manual · '+f.payment);} persist(); addNotification(o.userId,'Manual booking created','Admin created booking '+id+' for you','account'); addNotification('admin','Manual booking '+id+' created','For '+f.name+' — '+money(total.total),null,'Reservations'); closeModal(); render(); toast('Manual booking created — '+id);}
+function adminManualBooking(){
+  window.__v3ManualDocs={};
+  modal('Walk-in booking', `<form onsubmit="submitManualBooking(event)"><div class="formgrid">
+    <div class="field"><label>Customer ID (existing or blank for guest)</label><input name="userId" placeholder="Existing user ID or blank"></div>
+    <div class="field"><label>Customer full name</label><input name="name" required></div>
+    <div class="field"><label>Phone</label><input name="phone" required></div>
+    <div class="field"><label>Email</label><input type="email" name="email" required></div>
+    <div class="field"><label>CNIC (13 digits)</label><input name="identity" pattern="[0-9]{13}" required placeholder="0000000000000"></div>
+    <div class="field"><label>Car</label><select name="carId" required>${fleet.filter(c=>c.status==='Active').map(c=>`<option value="${c.id}">${c.id} — ${esc(c.name)} — ${money(c.rate)}/day</option>`).join('')}</select></div>
+    <div class="field"><label for="manual-cnic-front">CNIC front photo *</label><input id="manual-cnic-front" name="cnicFront" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required onchange="v3CaptureDoc(this,'manual-front','__v3ManualDocs')"><div id="v3-pv-manual-front" class="v3-upload-preview"></div></div>
+    <div class="field"><label for="manual-cnic-back">CNIC back photo *</label><input id="manual-cnic-back" name="cnicBack" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required onchange="v3CaptureDoc(this,'manual-back','__v3ManualDocs')"><div id="v3-pv-manual-back" class="v3-upload-preview"></div></div>
+    <div class="field"><label>Start date</label><input type="date" name="start" required min="${v3Today()}"></div>
+    <div class="field"><label>End date</label><input type="date" name="end" required min="${v3Today()}"></div>
+    <div class="field"><label>Start time</label><input type="time" name="startTime" required value="09:00"></div>
+    <div class="field"><label>Return time</label><input type="time" name="endTime" required value="09:00"></div>
+    <div class="field"><label>City</label><select name="city">${cities('Lahore')}</select></div>
+    <div class="field"><label>Service</label><select name="service"><option>Self-drive</option><option>With driver</option></select></div>
+    <div class="field"><label>Pickup mode</label><select name="pickupMode" onchange="v3ManualPickupMode(this.value)"><option>Office pickup</option><option>Home delivery</option></select></div>
+    <div class="field wide" id="manual-delivery-field" style="display:none"><label>Delivery address</label><input name="homeAddress" placeholder="House, street, area and city"></div>
+    <div class="field"><label>Payment method</label><select name="payment" onchange="v3ManualPaymentMode(this.value)"><option>Cash on pickup</option><option>JazzCash</option><option>easypaisa</option><option>Raast / bank transfer</option></select></div>
+    <div class="field" id="manual-paid-field"><label>Cash collected (PKR)</label><input type="number" name="paid" min="0" step="1" value="0"></div>
+  </div><p class="file-note">Both CNIC photos are required and stored privately.</p><button type="submit" class="btn full" style="margin-top:14px">Create walk-in booking ↗</button></form>`, true);
+}
+function v3ManualPickupMode(value){
+  const field=document.getElementById('manual-delivery-field');if(!field)return;
+  field.style.display=value==='Home delivery'?'':'none';
+  field.querySelector('input').required=value==='Home delivery';
+}
+function v3ManualPaymentMode(value){
+  const paid=document.querySelector('#manual-paid-field input');if(!paid)return;
+  paid.disabled=value!=='Cash on pickup';
+  if(paid.disabled)paid.value='0';
+}
+async function submitManualBooking(e){
+  e.preventDefault();
+  if(!v3Online()||!isAdminAuthenticated()||!__apexToken||!__apexServerReady)return toast('Admin server sign-in is required for private CNIC uploads.');
+  const form=e.target,f=Object.fromEntries(new FormData(form));
+  const front=form.elements.namedItem('cnicFront')?.files?.[0];
+  const back=form.elements.namedItem('cnicBack')?.files?.[0];
+  if(!front||!back)return toast('Both CNIC front and back photos are required.');
+  if([front,back].some(file=>!['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)||!file.size||file.size>2500000))return toast('Use PNG, JPEG, WebP or GIF images under 2.5 MB each.');
+  if(bannedCNICs.includes(f.identity))return toast('CNIC banned — cannot book');
+  const car=carBy(f.carId);
+  if(!car||car.status!=='Active')return toast('Select an active car.');
+  const startTime=f.startTime||'09:00',endTime=f.endTime||'09:00';
+  const startDt=f.start+'T'+startTime,endDt=f.end+'T'+endTime;
+  if(!f.start||!f.end||f.start<v3Today()||endDt<=startDt)return toast('Return date/time must be after pickup.');
+  if(f.pickupMode==='Home delivery'&&!f.homeAddress?.trim())return toast('A delivery address is required.');
+  const paid=Number(f.paid||0);
+  if(!Number.isSafeInteger(paid)||paid<0)return toast('Enter a valid cash amount.');
+  if(f.payment!=='Cash on pickup'&&paid>0)return toast('Verify electronic payments in Payments before recording them.');
+  const userId=String(f.userId||'').trim()||'guest-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  const btn=form.querySelector('button[type="submit"]');
+  btn.disabled=true;btn.textContent='Saving booking…';
+  let saved=null;
+  try{
+    const available=await v3Api('/api/availability?carId='+encodeURIComponent(car.id)+'&start='+encodeURIComponent(startDt)+'&end='+encodeURIComponent(endDt));
+    if(available?.available!==true)throw new Error('Car not available for this time.');
+    const [frontData,backData]=await Promise.all([v3ReadFile(front),v3ReadFile(back)]);
+    const frontDoc=await v3Upload(frontData,'cnic_front','user',userId);
+    const backDoc=await v3Upload(backData,'cnic_back','user',userId);
+    const item={carId:+f.carId,start:f.start,end:f.end,startTime,endTime,startDt,endDt,city:f.city,service:f.service};
+    saved=await v3Api('/api/orders',{method:'POST',body:JSON.stringify({
+      manual:true,userId,name:f.name.trim(),phone:f.phone.trim(),email:f.email.trim(),
+      identityType:'CNIC',identity:f.identity,identityStatus:'Pending',identityDocs:[frontDoc.id,backDoc.id],
+      destination:f.city,pickupMode:f.pickupMode,homeAddress:f.homeAddress?.trim()||'',officeAddress:config.officeAddress,
+      startDt:item.startDt,endDt:item.endDt,items:[item],payment:f.payment,
+      status:f.payment==='Cash on pickup'?'Confirmed':'Pending Verification',
+      paid,depositPaid:0,cancellationFee:0,ownerPayoutDone:false
+    })});
+    let cashError='';
+    if(paid>0){
+      try{await v3Api('/api/payments/record',{method:'POST',body:JSON.stringify({amount:paid,type:'payment',note:saved.id+' · walk-in · cash'})});}
+      catch(err){cashError=err.message}
+    }
+    closeModal();window.__v3ManualDocs={};
+    const refreshed=await v3RefreshBootstrap();
+    toast(cashError?'Booking '+saved.id+' saved, but cash was not recorded. Add it in Payments.':refreshed?'Walk-in booking created — '+saved.id:'Booking '+saved.id+' saved. Refresh Reservations to view it.');
+  }catch(err){
+    if(saved){closeModal();toast('Booking '+saved.id+' saved; refresh Reservations to view it.');}
+    else toast('Could not create booking: '+err.message);
+  }finally{if(btn.isConnected){btn.disabled=false;btn.textContent='Create walk-in booking ↗';}}
+}
 function openWithdrawModal(){modal('Withdraw from admin wallet',`<form onsubmit="submitWithdraw(event)"><div class="formgrid"><div class="field wide"><label>Amount (PKR)</label><input name="amount" type="number" min="1" required placeholder="e.g. 10000"></div><div class="field wide"><label>Account type</label><select name="atype"><option>Bank transfer</option><option>JazzCash</option><option>Easypaisa</option></select></div><div class="field wide"><label>Account number / IBAN</label><input name="anumber" required minlength="7" placeholder="e.g. PK36HABB0001... or 0300..."></div><div class="field wide"><label>Account title</label><input name="atitle" required placeholder="Name on the account"></div></div><p class="small muted" style="margin:12px 0">Available balance: <b>${money(adminWallet)}</b>.</p><button class="btn full">Withdraw ↗</button></form>`,true)}
 function submitWithdraw(e){e.preventDefault();const f=Object.fromEntries(new FormData(e.target));withdrawAdmin(+f.amount,f.atype+' '+f.anumber+' — '+f.atitle);}
 function withdrawAdmin(amount,account){amount=+amount; if(!amount||amount<=0){toast('Enter a valid amount');return;} if(!account||String(account).trim().length<7){toast('Withdrawal needs a destination account');return;} if(amount>adminWallet){toast('Not enough in wallet — balance '+money(adminWallet)); return;} adminWallet-=amount; persist(); fetch('/api/wallet/withdraw',{method:'POST',headers:apexHeaders(true),body:JSON.stringify({amount,account,note:'Admin withdrawal'})}).catch(()=>{}); closeModal(); render(); toast('Withdrawn '+money(amount)+' to '+account);}
@@ -629,7 +710,7 @@ function contact(){
   document.getElementById('chat-panel')?.querySelector('input[name="msg"]')?.focus();
 }
 function modal(title,body,large=false){document.getElementById('overlay').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()"><section class="modal ${large?'large':''}" role="dialog" aria-modal="true"><div class="modal-head"><h2>${title}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</section></div>`;document.body.style.overflow='hidden'}
-function closeModal(){document.getElementById('overlay').innerHTML='';document.body.style.overflow=''}
+function closeModal(){document.getElementById('overlay').innerHTML='';document.body.style.overflow='';if(window.__v3ManualDocs)window.__v3ManualDocs={}}
 function download(name,text,type='text/csv'){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function adminLoginPage(){return `<div class="admin-login-wrap"><div class="panel admin-login depth-layer"><div class="eyebrow">APEX OPERATIONS</div><h1>Admin login</h1><p class="small muted">Sign in to manage APEX.</p><form onsubmit="submitAdminLogin(event)"><div class="formgrid"><div class="field wide"><label>Username</label><input name="user" required autocomplete="username" value="admin"></div><div class="field wide"><label>Password</label><input name="pass" type="password" required autocomplete="current-password"></div></div><button class="btn full" style="margin-top:14px">Sign in to operations ↗</button></form></div></div>`}
 async function submitAdminLogin(e){
@@ -838,7 +919,7 @@ function v3CaptureDoc(input,slot,bag){
   if(!f.type.startsWith('image/'))return toast('Only image files allowed');
   if(f.size>2.5*1024*1024)return toast('Image too large (max 2.5 MB)');
   window[bag]=window[bag]||{};
-  v3ReadFile(f).then(u=>{window[bag][slot]=u;const pv=document.getElementById('v3-pv-'+slot);if(pv)pv.innerHTML='<img src="'+u+'" style="width:84px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--line)">';toast('Picture attached: '+slot.replace('_',' '))});
+  v3ReadFile(f).then(u=>{window[bag][slot]=u;const pv=document.getElementById('v3-pv-'+slot);if(pv)pv.innerHTML='<img src="'+u+'" style="width:84px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--line)">';toast('Picture attached: '+(slot.startsWith('manual-')?'CNIC '+slot.slice(7):slot.replace('_',' ')))});
 }
 function v3ItemStart(i){return i.startDt||(i.start+'T'+(i.startTime||'00:00'))}
 function v3ItemEnd(i){return i.endDt||(i.end+'T'+(i.endTime||'23:59'))}
@@ -939,10 +1020,10 @@ function refreshQuote(id){
 function card(c){
   const rented=__apexRentedIds instanceof Set?__apexRentedIds.has(Number(c.id)):!available(c);
   const status=c.status==='Active'?(rented?'Rented':'Active'):c.status;
-  return `<article class="car" data-car-id="${Number(c.id)}"><a class="car-photo" href="#car/${c.id}" aria-label="View ${esc(c.name)}"><img src="${getCarMainPhoto(c)}" alt="${esc(c.name)}" loading="lazy"><span class="pill car-status ${rented?'is-rented':''}">${esc(status)}</span></a><div class="car-body"><h3><a href="#car/${c.id}">${esc(c.name)}</a></h3><div class="car-rent"><strong>${money(c.rate)}</strong><span>/ day</span></div></div></article>`;
+  return `<article class="car" data-car-id="${Number(c.id)}"><a class="car-photo" href="#car/${c.id}" aria-label="View ${esc(c.name)}"><img src="${getCarMainPhoto(c)}" alt="${esc(c.name)}" loading="lazy"><span class="pill car-status ${rented?'is-rented':''}">${esc(status)}</span></a><div class="car-body"><h3><a href="#car/${c.id}">${esc(c.name)}</a></h3><div class="car-rent"><div class="car-daily"><strong>${money(c.rate)}</strong><span>/ day</span></div><small class="car-hourly">${money(v3Hourly(c))} / hour</small></div></div></article>`;
 }
 function home(){
-  return `<div class="wrap"><section class="hero depth-layer v3-hero"><img src="${photo('hero')}" alt="A premium car ready for the road"><div class="hero-copy"><h1>Driven<br><em>beyond ordinary.</em></h1><button class="btn" onclick="go('fleet')">Explore the collection ↗</button></div></section>${searchForm()}<section class="section"><div class="section-head"><div><div class="eyebrow">THE COLLECTION</div><h2>Find your next drive.</h2></div><button class="text-btn" onclick="go('fleet')">View all vehicles ↗</button></div><div class="cars">${fleet.filter(c=>c.status==='Active').map(card).join('')}</div></section><div class="benefits"><div class="benefit"><div class="symbol">✧</div><div><h3>Flexible rentals</h3><p>Book by the hour or day.</p></div></div><div class="benefit"><div class="symbol">⌘</div><div><h3>Drive or be driven</h3><p>Choose self-drive or a chauffeur.</p></div></div><div class="benefit"><div class="symbol">↗</div><div><h3>One reservation</h3><p>Add more than one vehicle to your journey.</p></div></div></div><div class="owner-banner depth-layer"><div><div class="eyebrow">PARTNER WITH APEX</div><h2>Put your car to work.</h2><p>List your vehicle with us.</p></div><button class="btn ghost" onclick="go('owner')">List your car ↗</button></div></div>`;
+  return `<div class="wrap"><section class="hero depth-layer v3-hero"><img src="${photo('hero')}" alt="A premium car ready for the road"><div class="hero-copy"><h1>Driven<br><em>beyond ordinary.</em></h1><button class="btn" onclick="go('fleet')">Explore fleet ↗</button></div></section>${searchForm()}<div class="trust" aria-label="Rental features"><div class="trust-track"><div class="trust-group"><span>Self-drive & chauffeur</span><span>Transparent pricing</span><span>Flexible rental plans</span><span>Multi-car reservations</span></div><div class="trust-group" aria-hidden="true"><span>Self-drive & chauffeur</span><span>Transparent pricing</span><span>Flexible rental plans</span><span>Multi-car reservations</span></div></div></div><section class="section"><div class="section-head"><div><div class="eyebrow">THE COLLECTION</div><h2>Find your next drive.</h2><p class="section-intro">City favourites and premium picks, ready when you are.</p></div><button class="text-btn" onclick="go('fleet')">View all vehicles ↗</button></div><div class="cars">${fleet.filter(c=>c.status==='Active').map(card).join('')}</div></section><div class="benefits"><div class="benefit"><div class="symbol">✧</div><div><h3>Flexible rentals</h3><p>Book by the hour or day.</p></div></div><div class="benefit"><div class="symbol">⌘</div><div><h3>Drive or be driven</h3><p>Choose self-drive or a chauffeur.</p></div></div><div class="benefit"><div class="symbol">↗</div><div><h3>One reservation</h3><p>Add more than one vehicle to your journey.</p></div></div></div><div class="owner-banner depth-layer"><div><div class="eyebrow">PARTNER WITH APEX</div><h2>Put your car to work.</h2><p>List your vehicle with us.</p></div><button class="btn ghost" onclick="go('owner')">List your car ↗</button></div></div>`;
 }
 
 function renterForm(){return `<h2 class="formtitle">Renter details</h2><form id="renter-form" onsubmit="reviewCheckout(event)"><div class="formgrid"><div class="field"><label>Full legal name</label><input name="name" required value="${esc(checkoutInfo.name||account.name)}" minlength="2"></div><div class="field"><label>Phone number</label><input name="phone" type="tel" required value="${esc(checkoutInfo.phone||account.phone)}"></div><div class="field"><label>Email address</label><input type="email" required name="email" value="${esc(account.email)}"></div><div class="field"><label>Date of birth (18+)</label><input type="date" name="dob" required max="${v3AgeCutoff(18)}" value="${esc(checkoutInfo.dob||'')}"></div><div class="field"><label>Identity document</label><select name="idType" onchange="updateID(this.value)"><option>CNIC</option><option>Passport</option></select></div><div class="field"><label id="identity-label">CNIC number · 13 digits</label><input id="identity-number" name="identity" required pattern="[0-9]{13}" placeholder="0000000000000"></div><div class="field"><label>CNIC front picture *</label><input type="file" accept="image/*" required onchange="v3CaptureDoc(this,'cnic_front','__v3Docs')"><div id="v3-pv-cnic_front" class="v3-upload-preview"></div></div><div class="field"><label>CNIC back picture *</label><input type="file" accept="image/*" required onchange="v3CaptureDoc(this,'cnic_back','__v3Docs')"><div id="v3-pv-cnic_back" class="v3-upload-preview"></div></div><div class="field wide"><label>Current address</label><input name="address" required minlength="8" value="${esc(checkoutInfo.address||'')}"></div><div class="field"><label>Emergency contact name</label><input name="emergencyName" required minlength="2" value="${esc(checkoutInfo.emergencyName||'')}"></div><div class="field"><label>Emergency contact phone</label><input name="emergencyPhone" type="tel" required value="${esc(checkoutInfo.emergencyPhone||'')}"></div><div class="field wide"><label>Trip purpose / Destination</label><input name="destination" required value="${esc(checkoutInfo.destination||'')}"></div><div class="field wide"><label>Pick-up mode</label><select name="pickupMode" onchange="toggleHomeDelivery(this.value)"><option value="Office pickup">Office pickup — ${esc(config.officeAddress)}</option><option value="Home delivery">Home delivery — +${money(config.homeDeliveryCharge)} car at your home</option></select></div><div class="field wide" id="home-delivery-field" style="display:none"><label>Home delivery full address</label><input name="homeAddress" placeholder="House #, Street, Area, City" value="${esc(checkoutInfo.homeAddress||'')}"></div></div>${cart.map((i,n)=>i.service==='Self-drive'?`<div class="detail-section" style="margin-top:25px"><h3 style="font-size:17px">Driver ${n+1} · ${esc(carBy(i.carId).name)}</h3><div class="formgrid"><div class="field"><label>Driver full name</label><input name="driverName_${n}" required></div><div class="field"><label>Driver DOB · 25+</label><input name="driverDOB_${n}" type="date" required max="${v3AgeCutoff(25)}"></div><div class="field"><label>Licence number</label><input name="license_${n}" required></div><div class="field"><label>Licence expiry</label><input name="expiry_${n}" type="date" required min="${i.end}"></div></div></div>`:'').join('')}<label class="check"><input type="checkbox" required name="terms"><span>I accept rental & cancellation terms.</span></label><div class="button-row"><button class="btn" type="submit">Review & pay ↗</button></div></form>`}
@@ -1442,7 +1523,8 @@ async function v3LoadOrderDocs(o){
   const box=document.getElementById('v3-order-docs');if(!box)return;
   try{
     const docs=await v3Api('/api/documents');
-    const mine=docs.filter(d=>d.ownerId===o.userId||d.ownerId===o.id);
+    const linked=new Set([...(o.identityDocs||[]),o.receiptDoc].map(Number).filter(Number.isFinite));
+    const mine=docs.filter(d=>linked.size?linked.has(Number(d.id))||d.ownerId===o.id:d.ownerId===o.userId||d.ownerId===o.id);
     box.innerHTML=mine.length?`<div class="eyebrow" style="margin-bottom:6px">CUSTOMER DOCUMENTS (private)</div><div style="display:flex;gap:8px;flex-wrap:wrap">${mine.map(d=>`<button class="btn ghost" onclick="v3ViewDoc(${d.id})">${esc(d.kind.replace('_',' '))} ${d.status==='Verified'?'✔':d.status==='Rejected'?'✖':'⏳'}</button>`).join('')}</div>`:'';
   }catch(e){}
 }

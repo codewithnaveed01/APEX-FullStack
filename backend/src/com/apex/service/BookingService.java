@@ -92,6 +92,8 @@ public final class BookingService {
 
     public JsonObject create(JsonObject session, JsonObject body) {
         boolean isAdmin = "admin".equals(Json.getStr(session, "role", ""));
+        boolean manual = Json.getBool(body, "manual", false);
+        if (manual && !isAdmin) throw ApiException.forbidden("Only admins can create walk-in bookings");
         String userId = isAdmin
                 ? Json.getStr(body, "userId", "")
                 : Json.getStr(session, "userId", "");
@@ -125,6 +127,9 @@ public final class BookingService {
 
         JsonArray identityDocs = body.has("identityDocs") && body.get("identityDocs").isJsonArray()
                 ? body.getAsJsonArray("identityDocs") : null;
+        if (manual && (identityDocs == null || identityDocs.size() != 2)) {
+            throw ApiException.validation("Walk-in bookings require CNIC front and back photos");
+        }
 
         String status0 = Json.clean(Json.getStr(body, "status", ""));
         String payment = Json.clean(Json.getStr(body, "payment", ""));
@@ -191,15 +196,30 @@ public final class BookingService {
             if (bans.contains(c, fIdentity)) {
                 throw ApiException.forbidden("This CNIC is banned from services");
             }
-            // 3) re-validate identity docs exist
+            // 3) walk-in CNIC photos must both belong to this booking's customer.
+            boolean front = false, back = false;
             if (identityDocs != null) {
                 for (JsonElement el : identityDocs) {
                     long docId = el.isJsonPrimitive() && el.getAsJsonPrimitive().isNumber()
                             ? el.getAsJsonPrimitive().getAsLong() : -1;
-                    if (docId <= 0 || !documents.exists(c, docId)) {
+                    JsonObject doc = docId > 0 ? documents.get(c, docId) : null;
+                    if (doc == null) {
                         throw ApiException.validation("An attached identity document is invalid");
                     }
+                    if (manual) {
+                        if (!"user".equals(Json.getStr(doc, "ownerType", "")) ||
+                                !userId.equals(Json.getStr(doc, "ownerId", ""))) {
+                            throw ApiException.validation("CNIC photos must belong to the walk-in customer");
+                        }
+                        String kind = Json.getStr(doc, "kind", "");
+                        if ("cnic_front".equals(kind)) front = true;
+                        else if ("cnic_back".equals(kind)) back = true;
+                        else throw ApiException.validation("Walk-in bookings require CNIC front and back photos");
+                    }
                 }
+            }
+            if (manual && (!front || !back)) {
+                throw ApiException.validation("Walk-in bookings require CNIC front and back photos");
             }
             // 4) quote + clash check, server side
             long sumBase = 0, sumSaving = 0, sumDriver = 0, sumRental = 0, sumDeposit = 0;
@@ -256,8 +276,9 @@ public final class BookingService {
             order.addProperty("identityType", fIdentityType);
             order.addProperty("identity", fIdentity);
             order.addProperty("identityMasked", maskIdentity(fIdentityType, fIdentity));
-            order.addProperty("identityStatus", Json.clean(Json.getStr(body, "identityStatus", "")).isEmpty()
-                    ? "Pending" : Json.getStr(body, "identityStatus", "Pending"));
+            order.addProperty("identityStatus", manual ? "Pending"
+                    : Json.clean(Json.getStr(body, "identityStatus", "")).isEmpty()
+                            ? "Pending" : Json.getStr(body, "identityStatus", "Pending"));
             order.add("totals", totals);
             order.addProperty("payment", fPayment);
             if (cashPayment(fPayment)) {

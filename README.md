@@ -8,7 +8,7 @@ backend/
   src/com/apex/      Java 17 source (controllers → services → repos → db wire client)
   migrations/        PostgreSQL schema (applied automatically on boot)
   lib/               gson-2.10.1.jar (only dependency; BCrypt is vendored in src)
-  seed.json          first-boot fleet/drivers/config seed
+  seed.json          first-boot fleet/7 drivers/config seed
   .env.example       all supported environment variables
 Dockerfile           multi-stage temurin:17 build
 docker-compose.yml   app + postgres, one command
@@ -31,10 +31,14 @@ railway.json         legacy Railway config for existing services (new services: 
   booking_items, owner_applications, notifications, chat_threads, chat_messages,
   banned_cnic, wallet, owner_wallets, wallet_transactions, documents (BYTEA), payments,
   reviews, app_settings.
+- **`migrations/002_add_seed_drivers.sql`** — adds four drivers on existing installations
+  without overwriting admin edits; a fresh installation seeds all seven from `seed.json`.
 
 Money is **always computed server-side** from `cars.rate` / `hourly_rate` / settings —
 client-sent prices are never trusted. Receipt upload → `Pending Verification`; only an
-admin action verifies (credits wallet) / rejects / requests re-upload.
+admin action verifies (credits wallet) / rejects / requests re-upload. Walk-in
+bookings require both CNIC sides; photos are stored privately, linked to the
+booking, and are not automatically marked verified.
 
 ## Local run (no Docker)
 
@@ -76,6 +80,7 @@ node backend/test/frontend_sync_test.js
 node backend/test/frontend_date_test.js
 node backend/test/frontend_live_test.js
 node backend/test/frontend_availability_test.js
+node backend/test/frontend_manual_test.js
 
 # With a LOCAL PostgreSQL URL accessible from the host and JDK 17 installed:
 bash backend/build.sh
@@ -114,8 +119,8 @@ The Java app serves **both** `/` (customer site), `/admin.html` (admin panel), a
    as the website's target port.
 6. **Deploy** the app. In deployment logs, expect `Connected to PostgreSQL`,
    `Applying migration 001_init.sql`, `Applied migration 001_init.sql`, and
-   `APEX ready in ... ms`. Migrations run automatically on first boot, before
-   the HTTP server starts; later boots skip applied migrations and retain data.
+   `APEX ready in ... ms`. Migrations run before the HTTP server starts; later
+   boots skip applied files, apply new migrations once, and retain existing data.
 7. Under the **app** service's **Settings → Networking → Public Networking** click
    **Generate Domain**. A Postgres service's domain/TCP proxy is **not** the website.
    Open `https://<app-domain>/` and `/admin.html`. Check
