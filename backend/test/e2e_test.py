@@ -413,6 +413,15 @@ check("sync did NOT touch ownerWallets", w.get("ownerWallets", {}).get("hacked")
 s, bs2 = req("GET", "/api/bootstrap", token=admin)
 check("sync preserved orders count", len(bs2.get("orders", [])) == len(bs.get("orders", [])), f"{len(bs2.get('orders', []))} vs {len(bs.get('orders', []))}")
 check("sync preserved users", len(bs2.get("users", [])) == len(bs.get("users", [])), f"{len(bs2.get('users', []))} vs {len(bs.get('users', []))}")
+# A stale browser can have invalid records in unrelated collections. The
+# frontend sends only the edited keys; verify the backend accepts that patch.
+s, b = req("PUT", "/api/sync", {"users": [{"id": "old-cache-without-username"}]}, token=admin)
+check("invalid legacy user reports specific 422", s == 422 and "username" in b.get("error", ""), f"{s} {b}")
+settings_before = req("GET", "/api/settings")[1]
+s, b = req("PUT", "/api/sync", {"config": {**settings_before, "driverRate": 7600}}, token=admin)
+check("config-only sync avoids unrelated invalid users", s == 200 and b.get("status") == "synced", f"{s} {b}")
+check("config-only sync persisted", req("GET", "/api/settings")[1].get("driverRate") == 7600, "")
+req("PUT", "/api/sync", {"config": settings_before}, token=admin)  # restore
 # sync with an overlapping order must fail atomically
 bad_state = dict(state)
 bad_orders = [o for o in bs.get("orders", []) if o.get("id") != oid]

@@ -20,9 +20,8 @@ function getCarMainPhoto(c){
 // Use the visitor's local calendar day (not a date baked into the deploy).
 function localDateOffset(days){const d=new Date();d.setDate(d.getDate()+days);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
 const TODAY=localDateOffset(0);
-let config=read('config',{driverRate:4500,overtime:500,jazzCashNumber:'0300-1234567',easypaisaNumber:'0300-7654321',bankAccount:'APEX Rentals - HBL 12345678901234',bankIBAN:'PK36HABB0001234567890123',raastId:'03001234567',officeAddress:'APEX Rental Office, Main Boulevard, Gulberg III, Lahore, Pakistan - 54000',homeDeliveryCharge:1500,companyPhone:'+92 300 1234567'});
-// Merge defaults if missing
-config={driverRate:4500,overtime:500,jazzCashNumber:'0300-1234567',easypaisaNumber:'0300-7654321',bankAccount:'APEX Rentals - HBL 12345678901234',bankIBAN:'PK36HABB0001234567890123',raastId:'03001234567',officeAddress:'APEX Rental Office, Main Boulevard, Gulberg III, Lahore, Pakistan - 54000',homeDeliveryCharge:1500,companyPhone:'+92 300 1234567',...config};
+const defaultConfig={driverRate:4500,overtime:500,jazzCashNumber:'0300-1234567',easypaisaNumber:'0300-7654321',bankAccount:'APEX Rentals - HBL 12345678901234',bankIBAN:'PK36HABB0001234567890123',raastId:'03001234567',officeAddress:'APEX Rental Office, Main Boulevard, Gulberg III, Lahore, Pakistan - 54000',homeDeliveryCharge:1500,companyPhone:'+92 300 1234567'};
+let config={...defaultConfig,...read('config',{})};
 let adminWallet=read('adminWallet',0);
 let ownerWallets=read('ownerWallets',{});
 let bannedCNICs=read('bannedCNICs',[]);
@@ -42,8 +41,9 @@ const defaultFleet=[
 {id:13,name:'Kia Sportage L HEV AWD',brand:'Kia',category:'SUV',image:'pk-sportage',year:2025,rate:18000,seats:5,engine:'1.6L Turbo Hybrid Smartstream',power:'227 hp combined',fuel:'Hybrid',km:'9,200 km',color:'Interstellar Grey',plate:'KHI-xxx310',condition:'Excellent',status:'Active',deposit:75000,features:['Hybrid AWD','Panoramic sunroof','Ventilated seats','12.3-inch dual display','ADAS','Wireless charging'],origin:'Pakistan',marketNote:'New Sportage L HEV. Market 12000-20000/day.'}
 ];
 let fleet=read('fleet',defaultFleet);
-if(!Array.isArray(fleet)||fleet.length<3){fleet=defaultFleet;write('fleet',fleet);}
-else if(fleet.length<defaultFleet.length){const ids=new Set(fleet.map(c=>c.id));defaultFleet.forEach(c=>{if(!ids.has(c.id))fleet.push(c);});write('fleet',fleet);}
+// An empty/short catalog can be intentional (or an unsaved admin edit).
+// Do not silently re-add deleted cars from defaults on a refresh.
+if(!Array.isArray(fleet)){fleet=defaultFleet;write('fleet',fleet);}
 let drivers=read('drivers',[{id:1,name:'Ali Raza',phone:'+92 300 0000101',city:'Lahore',experience:8,license:'LHR-xxx102',active:true},{id:2,name:'Imran Shah',phone:'+92 300 0000102',city:'Islamabad',experience:11,license:'ISB-xxx209',active:true},{id:3,name:'Bilal Ahmed',phone:'+92 300 0000103',city:'Karachi',experience:6,license:'KHI-xxx311',active:false}]);
 let orders=read('orders',[]),applications=read('applications',[]),account=read('session',null),cart=read('cart',[]);
 let users=read('users',[]);
@@ -59,6 +59,10 @@ if(!trip?.start || trip.start<TODAY || !trip.end || trip.end<=trip.start){
 let route='',category='All cars',sort='Recommended',galleryIndex=0,currentCar=1,checkoutStep=1,checkoutInfo={},payment='Cash on pickup',adminTab='Payments',adminQuery='',notifOpen=false,chatOpen=false,activeChatUser=null;
 let isAdmin=!!window.ADMIN_MODE||location.pathname.endsWith('/admin.html');
 let adminSession=read('adminSession',null);
+// The admin's cached browser state is never trusted as the server state on load.
+// Wait for an authenticated bootstrap before allowing edits or sync pushes.
+let __apexServerReady=false;
+let __apexRefreshId=0; // ignore late responses from superseded refreshes/logouts
 function isAdminAuthenticated(){return !!(adminSession && adminSession.user==='admin');}
 const carBy=id=>fleet.find(c=>c.id===+id);
 const duration=(s,e)=>Math.max(1,Math.ceil((new Date(e)-new Date(s))/86400000));
@@ -386,7 +390,7 @@ async function submitAdminLogin(e){
     v3RefreshBootstrap();
   }catch(err){toast(err.message||'Invalid credentials.');}
 }
-function adminLogout(){adminSession=null;store.removeItem('v2_adminSession');if(account && account.id==='admin'){account=null;store.removeItem('v2_session');}apexClearToken();persist();render();toast('Admin signed out')}
+function adminLogout(){adminSession=null;__apexServerReady=false;__apexRefreshId++;clearTimeout(__apexPushT);store.removeItem('v2_adminSession');if(account && account.id==='admin'){account=null;store.removeItem('v2_session');}apexClearToken();persist();render();toast('Admin signed out')}
 
 function adminShell(){
   if(!isAdminAuthenticated()){return `<div class="topline">APEX OPERATIONS · ADMIN ACCESS</div><div class="wrap">${adminLoginPage()}</div>`}
@@ -436,6 +440,7 @@ function seedDemo(){if(orders.some(o=>o.id==='VR-DEMO01'))return toast('Sample a
 function render(){
   if(isAdmin){
     if(!isAdminAuthenticated()){document.getElementById('app').innerHTML=`<div class="topline">APEX OPERATIONS</div><div class="wrap">${adminLoginPage()}</div>`;return}
+    if(v3Online()&&!__apexServerReady){document.getElementById('app').innerHTML='<div class="topline">APEX OPERATIONS</div><div class="wrap"><div class="panel" style="margin:10vh auto;max-width:480px;text-align:center"><h2>Loading server data…</h2><p class="muted">Admin editing is paused until the latest data is available.</p><button class="btn" onclick="v3RefreshBootstrap()">Retry loading ↗</button></div></div>';return}
     document.getElementById('app').innerHTML=adminShell();
     renderNotif();
     return;
@@ -466,40 +471,34 @@ render();
 document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');if(a){e.preventDefault();go(a.getAttribute('href').slice(1))}});
 document.addEventListener('click',e=>{const b=e.target.closest('button');if(b&&b.form&&b.type==='submit'){e.preventDefault();if(b.form.reportValidity())b.form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))}},true);
 
-/* ================= APEX JAVA BACKEND SYNC ADAPTER =================
-   Connects this frontend to the Java OOP backend (SQLite database).
-   - On load  : pulls the full state from GET  /api/bootstrap
-   - On change: pushes the full state to  PUT /api/sync (admin token)
-   - Admin login also mints a bearer token via POST /api/auth/login
-   Without a server (file:// double-click) everything gracefully falls
-   back to the original localStorage-only behaviour.                   */
+/* APEX Java + PostgreSQL sync adapter. Browser storage is a cache, not the
+   source of truth. A fresh login/refresh pulls the server first; only fields
+   edited afterwards are sent to /api/sync. No legacy local cache is pushed
+   automatically (it can contain invalid or out-of-date rows). */
 let __apexToken=read('apiToken',null);
 function apexHeaders(withJson){const h={};if(withJson)h['Content-Type']='application/json';if(__apexToken)h['Authorization']='Bearer '+__apexToken;return h;}
 function apexClearToken(){__apexToken=null;store.removeItem('v2_apiToken');}
-function apexAdminLogin(u,p){if(window.location.protocol==='file:')return;fetch('/api/auth/login',{method:'POST',headers:apexHeaders(true),body:JSON.stringify({username:u,password:p})}).then(r=>r.ok?r.json():null).then(d=>{if(d&&d.token){__apexToken=d.token;write('apiToken',__apexToken);apexPushNow();}}).catch(()=>{});}
+const __apexSyncKeys=['fleet','drivers','users','orders','applications','notifications','chats','bannedCNICs','config'];
+const __apexMergeKeys=new Set(['users','orders','applications','notifications','chats']);
+let __apexBaseline={};
+let __apexSending=false;
 let __apexPushT=null;
-function apexSchedulePush(){if(window.location.protocol==='file:'||!__apexToken)return;clearTimeout(__apexPushT);__apexPushT=setTimeout(apexPushNow,700);}
-function apexPushNow(){if(window.location.protocol==='file:'||!__apexToken)return;fetch('/api/sync',{method:'PUT',headers:apexHeaders(true),body:JSON.stringify({fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,adminWallet,ownerWallets,config})}).then(r=>{if(r.status===401)apexClearToken();}).catch(()=>{});}
+function apexSyncState(){return {fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,config};}
+function apexPendingKeys(){const keys=read('apexPendingSyncKeys',[]);return Array.isArray(keys)?keys.filter(k=>__apexSyncKeys.includes(k)):[];}
+function apexRememberPending(keys){write('apexPendingSyncKeys',[...new Set([...apexPendingKeys(),...keys])]);}
+function apexChangedKeys(){const state=apexSyncState();return __apexSyncKeys.filter(k=>JSON.stringify(state[k])!==__apexBaseline[k]);}
+function apexSchedulePush(){
+  if(!v3Online()||!isAdmin||!isAdminAuthenticated()||!__apexToken||!__apexServerReady)return;
+  const dirty=apexChangedKeys();
+  if(!dirty.length)return;
+  apexRememberPending(dirty); // keep unsaved edits across a page refresh
+  clearTimeout(__apexPushT);
+  __apexPushT=setTimeout(apexPushNow,700);
+}
 function apexRecordPayment(amount,type,note){if(window.location.protocol==='file:'||!amount)return;fetch('/api/payments/record',{method:'POST',headers:apexHeaders(true),body:JSON.stringify({amount:Math.round(amount),type:type||'payment',note:note||''})}).catch(()=>{});}
 const __apexPersist=persist;
 persist=function(){__apexPersist();apexSchedulePush();};
-if(window.location.protocol!=='file:'){
-  fetch('/api/bootstrap',{headers:apexHeaders(false)}).then(r=>r.ok?r.json():null).then(s=>{
-    if(!s)return;
-    if(Array.isArray(s.fleet)&&s.fleet.length)fleet=s.fleet;
-    if(Array.isArray(s.drivers)&&s.drivers.length)drivers=s.drivers;
-    if(Array.isArray(s.users))users=s.users;
-    if(Array.isArray(s.orders))orders=s.orders;
-    if(Array.isArray(s.applications))applications=s.applications;
-    if(Array.isArray(s.notifications))notifications=s.notifications;
-    if(Array.isArray(s.chats))chats=s.chats;
-    if(Array.isArray(s.bannedCNICs))bannedCNICs=s.bannedCNICs;
-    if(typeof s.adminWallet==='number')adminWallet=s.adminWallet;
-    if(s.ownerWallets)ownerWallets=s.ownerWallets;
-    if(s.config&&Object.keys(s.config).length)config={...config,...s.config};
-    __apexPersist();render();
-  }).catch(()=>{});
-}
+if(v3Online()&&(!isAdmin||isAdminAuthenticated()))v3RefreshBootstrap();
 
 /* =====================================================================
    APEX V3 UPGRADE — hourly+daily pricing, date+time pickers, server auth,
@@ -706,6 +705,7 @@ async function submitAuth(e,signup,next){
         : await v3Api('/api/auth/login',{method:'POST',body:JSON.stringify({username:f.username.trim(),password:f.password})});
       __apexToken=res.token;write('apiToken',__apexToken);
       if(res.role==='admin'){
+        __apexServerReady=false;
         adminSession={user:'admin',at:new Date().toISOString()};
         adminTab='Overview';
         account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
@@ -751,6 +751,7 @@ async function submitAdminLogin(e){
     const d=await v3Api('/api/auth/login',{method:'POST',body:JSON.stringify({username:f.user,password:f.pass})});
     if(!d||d.role!=='admin'){toast('Invalid credentials.');return;}
     __apexToken=d.token;write('apiToken',__apexToken);
+    __apexServerReady=false;
     adminSession={user:'admin',at:new Date().toISOString()};
     adminTab='Overview';
     account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
@@ -773,15 +774,22 @@ function apexAdminLogin(u,p){
    registrations / bookings / payments made on another device while this page
    was open) are KEPT — a stale browser can no longer wipe them. */
 function apexMergeById(serverList,localList){
-  const out=[...(localList||[])];
+  const out=Array.isArray(localList)?[...localList]:[];
   const ids=new Set(out.map(x=>x&&(x.id!==undefined?String(x.id):'')).filter(Boolean));
-  for(const row of (serverList||[])){
+  for(const row of (Array.isArray(serverList)?serverList:[])){
     if(!row)continue;
     const rid=row.id!==undefined?String(row.id):'';
     if(rid&&ids.has(rid))continue;
     out.push(row);
   }
   return out;
+}
+function apexKeepNewCatalogRows(key,serverList,localList){
+  // Fleet/drivers are replaced by /api/sync. Preserve rows added elsewhere
+  // since our last bootstrap without undoing this admin's intentional deletes.
+  const known=new Set(JSON.parse(__apexBaseline[key]).map(x=>String(x?.id)));
+  const present=new Set(localList.map(x=>String(x?.id)));
+  return [...localList,...serverList.filter(x=>!known.has(String(x?.id))&&!present.has(String(x?.id)))];
 }
 function apexSyncBanner(msg,show){
   let el=document.getElementById('apex-sync-banner');
@@ -790,53 +798,123 @@ function apexSyncBanner(msg,show){
     el.textContent=msg;el.style.display='block';
   }else if(el){el.style.display='none';}
 }
-function apexPushNow(){
-  if(!v3Online()||!__apexToken)return;
-  if(!isAdminAuthenticated())return;               // customers sync via dedicated APIs, never full-state push
-  const doPush=body=>fetch('/api/sync',{method:'PUT',headers:apexHeaders(true),body:JSON.stringify(body)})
-    .then(r=>{
-      if(r.status===401){apexClearToken();apexSyncBanner('Server session expired — sign in again as admin to save changes.',true);return;}
-      if(!r.ok)throw new Error('HTTP '+r.status);
-      apexSyncBanner('',false);
-    })
-    .catch(e=>{console.error('APEX sync failed:',e);apexSyncBanner('⚠ Server save FAILED — latest changes are NOT saved ('+(e.message||e)+'). Retry: make any small edit after the deploy is healthy.',true);});
-  // Pull the FRESHEST server state first, merge, then push.
-  fetch('/api/bootstrap',{headers:apexHeaders(true)}).then(r=>r.ok?r.json():null)
-    .then(latest=>{
-      const body={fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,config};
-      if(latest){
-        body.users=apexMergeById(latest.users,users);
-        body.orders=apexMergeById(latest.orders,orders);
-        body.applications=apexMergeById(latest.applications,applications);
-        body.notifications=apexMergeById(latest.notifications,notifications);
-        body.chats=apexMergeById(latest.chats,chats);
-      }
-      // Wallets are server-authoritative now (v3 payment/wallet endpoints
-      // update them directly) — NOT pushed here, so a stale browser can
-      // never reset the balance.
-      doPush(body);
-    })
-    .catch(()=>doPush({fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,config}));
+async function apexResponseError(r){
+  let detail=null;try{detail=await r.json()}catch(e){}
+  const error=new Error('HTTP '+r.status+': '+(detail?.error||'Server request failed'));
+  error.status=r.status;
+  return error;
+}
+function apexExpireAdminSession(){
+  __apexRefreshId++;apexClearToken();adminSession=null;store.removeItem('v2_adminSession');
+  if(account?.id==='admin'){account=null;store.removeItem('v2_session')}
+  __apexServerReady=false;clearTimeout(__apexPushT);render();
+  apexSyncBanner('Admin session expired — sign in again. Unsaved browser edits are still cached.',true);
+}
+async function apexPushNow(){
+  if(!v3Online()||!isAdmin||!isAdminAuthenticated()||!__apexToken||!__apexServerReady||__apexSending)return;
+  const state=apexSyncState(), keys=apexChangedKeys();
+  if(!keys.length){write('apexPendingSyncKeys',[]);apexSyncBanner('',false);return}
+  const refreshId=__apexRefreshId;
+  const captured={},body={};
+  for(const key of keys){captured[key]=JSON.stringify(state[key]);body[key]=JSON.parse(captured[key])}
+  __apexSending=true;
+  let success=false;
+  try{
+    // Only changed collections are sent. An old localStorage row in an
+    // unrelated collection must never break a settings/fleet edit with 422.
+    const current=await fetch('/api/bootstrap',{headers:apexHeaders(false)});
+    if(!current.ok)throw await apexResponseError(current);
+    const latest=await current.json();
+    if(refreshId!==__apexRefreshId||!__apexServerReady||!isAdminAuthenticated())return;
+    for(const key of keys){
+      if(__apexMergeKeys.has(key)&&Array.isArray(latest[key]))body[key]=apexMergeById(latest[key],body[key]);
+      else if((key==='fleet'||key==='drivers')&&Array.isArray(latest[key]))body[key]=apexKeepNewCatalogRows(key,latest[key],body[key]);
+    }
+    const response=await fetch('/api/sync',{method:'PUT',headers:apexHeaders(true),body:JSON.stringify(body)});
+    if(refreshId!==__apexRefreshId)return; // a newer bootstrap owns the baseline
+    if(response.status===401){apexExpireAdminSession();return}
+    if(!response.ok)throw await apexResponseError(response);
+    for(const key of keys)__apexBaseline[key]=captured[key];
+    const remaining=apexChangedKeys();
+    write('apexPendingSyncKeys',remaining);
+    if(!remaining.length)apexSyncBanner('',false);
+    success=true;
+  }catch(e){
+    if(refreshId===__apexRefreshId){
+      console.error('APEX sync failed:',e);
+      apexRememberPending(apexChangedKeys());
+      apexSyncBanner('⚠ Server save FAILED — '+(e.message||e)+'. Changes remain in this browser; fix the indicated data and retry.',true);
+    }
+  }finally{
+    __apexSending=false;
+    if((success||refreshId!==__apexRefreshId)&&__apexServerReady&&apexChangedKeys().length)apexSchedulePush();
+  }
+}
+function apexAssignSyncKey(key,value){
+  switch(key){
+    case 'fleet':fleet=value;break;case 'drivers':drivers=value;break;
+    case 'users':users=value;break;case 'orders':orders=value;break;
+    case 'applications':applications=value;break;case 'notifications':notifications=value;break;
+    case 'chats':chats=value;break;case 'bannedCNICs':bannedCNICs=value;break;
+    case 'config':config=value;break;
+  }
 }
 function v3RefreshBootstrap(){
-  if(!v3Online())return;
-  fetch('/api/bootstrap',{headers:apexHeaders(false)}).then(r=>r.ok?r.json():null).then(s=>{
-    if(!s)return;
-    if(Array.isArray(s.fleet)&&s.fleet.length)fleet=s.fleet;
-    if(Array.isArray(s.drivers)&&s.drivers.length)drivers=s.drivers;
-    if(Array.isArray(s.users))users=s.users;
-    if(Array.isArray(s.orders))orders=s.orders;
-    if(Array.isArray(s.applications))applications=s.applications;
-    if(Array.isArray(s.notifications))notifications=s.notifications;
-    if(Array.isArray(s.chats))chats=s.chats;
-    if(Array.isArray(s.bannedCNICs))bannedCNICs=s.bannedCNICs;
+  if(!v3Online())return Promise.resolve(false);
+  const refreshId=++__apexRefreshId;
+  const adminPage=isAdmin&&isAdminAuthenticated();
+  const pending=adminPage?apexPendingKeys():[];
+  const local=apexSyncState(),unsaved={};
+  for(const key of pending)unsaved[key]=JSON.parse(JSON.stringify(local[key]));
+  if(adminPage){__apexServerReady=false;clearTimeout(__apexPushT);render()}
+  // A public /api/bootstrap returns 200 even for an expired token. Verify
+  // the stored admin token before treating its response as the admin state.
+  const verify=adminPage?fetch('/api/auth/me',{headers:apexHeaders(false)}).then(async r=>{
+    if(!r.ok)throw await apexResponseError(r);
+    const me=await r.json();
+    if(me.role!=='admin'){const e=new Error('Admin access required');e.status=403;throw e}
+  }):Promise.resolve();
+  return verify.then(async()=>{
+    if(refreshId!==__apexRefreshId)return null;
+    const r=await fetch('/api/bootstrap',{headers:apexHeaders(false)});
+    if(!r.ok)throw await apexResponseError(r);
+    return r.json();
+  }).then(s=>{
+    if(refreshId!==__apexRefreshId||(adminPage&&!isAdminAuthenticated()))return false;
+    if(!s||!Array.isArray(s.fleet))throw new Error('Invalid server bootstrap response');
+    for(const key of __apexSyncKeys){
+      if(key==='config'){
+        if(s.config&&typeof s.config==='object'&&!Array.isArray(s.config))config={...defaultConfig,...s.config};
+      }else if(Array.isArray(s[key]))apexAssignSyncKey(key,s[key]);
+    }
     if(typeof s.adminWallet==='number')adminWallet=s.adminWallet;
+    else if(typeof s.adminWallet?.balance==='number')adminWallet=s.adminWallet.balance;
     if(s.ownerWallets)ownerWallets=s.ownerWallets;
-    if(s.config&&Object.keys(s.config).length)config={...config,...s.config};
+    if(adminPage){
+      const serverState=apexSyncState();
+      for(const key of __apexSyncKeys)__apexBaseline[key]=JSON.stringify(serverState[key]);
+      for(const key of pending){
+        const value=__apexMergeKeys.has(key)?apexMergeById(serverState[key],unsaved[key]):unsaved[key];
+        apexAssignSyncKey(key,value);
+      }
+      __apexServerReady=true;
+    }
     if(!trip.startTime)trip.startTime='09:00';
     if(!trip.endTime)trip.endTime='09:00';
     __apexPersist();render();
-  }).catch(()=>{});
+    if(adminPage){
+      if(apexChangedKeys().length)apexSchedulePush();
+      else{write('apexPendingSyncKeys',[]);apexSyncBanner('',false)}
+    }
+    return true;
+  }).catch(e=>{
+    if(refreshId!==__apexRefreshId)return false;
+    if(adminPage){
+      if(e.status===401||e.status===403)apexExpireAdminSession();
+      else{console.error('APEX bootstrap failed:',e);apexSyncBanner('Could not load current server data ('+(e.message||e)+'). Admin editing is paused; retry loading.',true)}
+    }else console.error('APEX bootstrap failed:',e);
+    return false;
+  });
 }
 
 /* ---------- customer chat -> server endpoint ---------- */

@@ -71,7 +71,8 @@ docker compose up --build
 ```bash
 # With the app running at localhost:3030 (e.g. via Docker Compose):
 python3 backend/test/e2e_test.py
-# Optional, with Node installed: test date defaults (no server needed)
+# Optional, with Node installed: test frontend refresh/sync and date defaults (no server needed)
+node backend/test/frontend_sync_test.js
 node backend/test/frontend_date_test.js
 
 # With a LOCAL PostgreSQL URL accessible from the host and JDK 17 installed:
@@ -145,6 +146,18 @@ Check the app logs for `APEX ready`. If absent, fix the logged DB/migration erro
 if present, verify **Generate Domain is on the app**, Root Directory is the repo
 root, Start Command is unset, and its target port matches `$PORT`. `/health`
 checks the DB; `/` checks static files; `/api/bootstrap` checks seeded data.
+
+### Admin banner after refresh: `Server save FAILED (HTTP 422)`
+
+Admin changes now wait for a verified server bootstrap. A refresh **does not** upload
+old browser-cached users/bookings/fleet to PostgreSQL; after an edit only the
+changed collection is synced. If a real save still fails, the red banner shows
+the backend's specific `error` (for example, which row is missing a required
+field). Correct the indicated data and edit/save again. Unsaved admin edits
+are kept in that browser across refreshes, so **do not clear site storage**
+without first backing up any unsaved work. If the banner says the admin session
+expired, sign in again; if bootstrap cannot load, editing stays paused until
+it succeeds. Server data is never reset by clearing a browser cache.
 
 **Railway note (2026):** `railway.json` is a *legacy* [Config-as-Code](https://docs.railway.com/config-as-code)
 file. New Railway services do not use it; set the healthcheck/restart settings
