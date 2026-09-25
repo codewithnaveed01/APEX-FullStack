@@ -17,7 +17,9 @@ function getCarPhoto(c,key){
 function getCarMainPhoto(c){
   return c.customImage ? c.customImage : photo(c.image);
 }
-const TODAY='2026-09-19';
+// Use the visitor's local calendar day (not a date baked into the deploy).
+function localDateOffset(days){const d=new Date();d.setDate(d.getDate()+days);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+const TODAY=localDateOffset(0);
 let config=read('config',{driverRate:4500,overtime:500,jazzCashNumber:'0300-1234567',easypaisaNumber:'0300-7654321',bankAccount:'APEX Rentals - HBL 12345678901234',bankIBAN:'PK36HABB0001234567890123',raastId:'03001234567',officeAddress:'APEX Rental Office, Main Boulevard, Gulberg III, Lahore, Pakistan - 54000',homeDeliveryCharge:1500,companyPhone:'+92 300 1234567'});
 // Merge defaults if missing
 config={driverRate:4500,overtime:500,jazzCashNumber:'0300-1234567',easypaisaNumber:'0300-7654321',bankAccount:'APEX Rentals - HBL 12345678901234',bankIBAN:'PK36HABB0001234567890123',raastId:'03001234567',officeAddress:'APEX Rental Office, Main Boulevard, Gulberg III, Lahore, Pakistan - 54000',homeDeliveryCharge:1500,companyPhone:'+92 300 1234567',...config};
@@ -47,7 +49,13 @@ let orders=read('orders',[]),applications=read('applications',[]),account=read('
 let users=read('users',[]);
 let notifications=read('notifications',[]);
 let chats=read('chats',[]);
-let trip=read('trip',{city:'Lahore',start:'2026-09-22',end:'2026-09-24',service:'Self-drive'});
+let trip=read('trip',{city:'Lahore',start:localDateOffset(1),end:localDateOffset(2),service:'Self-drive'});
+// A previously saved trip can outlive the dates it was booked for. Do not
+// land returning visitors on a search form with expired pick-up dates.
+if(!trip?.start || trip.start<TODAY || !trip.end || trip.end<=trip.start){
+  trip={city:trip?.city||'Lahore',start:localDateOffset(1),end:localDateOffset(2),startTime:'09:00',endTime:'09:00',service:trip?.service||'Self-drive'};
+  write('trip',trip);
+}
 let route='',category='All cars',sort='Recommended',galleryIndex=0,currentCar=1,checkoutStep=1,checkoutInfo={},payment='Cash on pickup',adminTab='Payments',adminQuery='',notifOpen=false,chatOpen=false,activeChatUser=null;
 let isAdmin=!!window.ADMIN_MODE||location.pathname.endsWith('/admin.html');
 let adminSession=read('adminSession',null);

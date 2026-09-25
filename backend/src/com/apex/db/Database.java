@@ -59,6 +59,16 @@ public final class Database implements AutoCloseable {
                 return db;
             } catch (RuntimeException e) {
                 last = e;
+                if (e instanceof PgConnection.PgException) {
+                    String code = ((PgConnection.PgException) e).pgCode;
+                    // Waiting for a cold-starting DB is useful; retrying a bad
+                    // password or non-existent database for 60s is not.
+                    if (code.startsWith("28") || "3D000".equals(code)) {
+                        db.close();
+                        throw new IllegalStateException("PostgreSQL rejected DATABASE_URL (" + code + "): " +
+                                e.getMessage() + ". Check the app service's Postgres reference.", e);
+                    }
+                }
                 if (i < retries) {
                     Logger.warn("Database not ready ({}). Retry {}/{} in {} ms",
                             e.getMessage(), i + 1, retries, retryMs);
@@ -66,6 +76,7 @@ public final class Database implements AutoCloseable {
                 }
             }
         }
+        db.close();
         throw new IllegalStateException("Cannot connect to PostgreSQL: " + last.getMessage(), last);
     }
 

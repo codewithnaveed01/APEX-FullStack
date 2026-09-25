@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """APEX backend end-to-end test suite (runs against 127.0.0.1:3030)."""
-import json, urllib.request, urllib.error, uuid, sys, concurrent.futures, time
+import json, urllib.request, urllib.error, uuid, sys, concurrent.futures, time, os
 
-BASE = "http://127.0.0.1:3030"
+BASE = os.environ.get("APEX_TEST_BASE", "http://127.0.0.1:3030").rstrip("/")
+ADMIN_PASS = os.environ.get("APEX_TEST_ADMIN_PASS", "admin1234")
 PASS, FAIL = 0, 0
 FAILURES = []
 
@@ -57,7 +58,7 @@ s, b = req("GET", "/api/nope")
 check("unknown api 404 + error json", s == 404 and isinstance(b, dict) and "error" in b, f"{s} {b}")
 
 print("== 2. Auth ==")
-s, b = req("POST", "/api/auth/login", {"username": "admin", "password": "admin1234"})
+s, b = req("POST", "/api/auth/login", {"username": "admin", "password": ADMIN_PASS})
 check("admin login", s == 200 and b.get("role") == "admin" and b.get("token"), f"{s} {b if s != 200 else 'ok'}")
 admin = b.get("token") if s == 200 else None
 s, b = req("POST", "/api/auth/login", {"username": "admin", "password": "wrong"})

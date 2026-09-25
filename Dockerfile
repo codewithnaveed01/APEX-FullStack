@@ -21,6 +21,6 @@ ENV PORT=3030 \
     APEX_HOME=/app/backend \
     APEX_STATIC=/app/frontend
 EXPOSE 3030
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD curl -fsS http://127.0.0.1:${PORT}/health || exit 1
+# Configure Railway's HTTP /health check in service settings (or legacy
+# railway.json). A Docker HEALTHCHECK using curl would fail without curl.
 CMD ["java", "-cp", "/app/backend/out:/app/backend/lib/*", "com.apex.Main"]

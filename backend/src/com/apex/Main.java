@@ -72,7 +72,8 @@ public final class Main {
             String path = ex.getRequestURI().getPath();
             if (path.equals("/health")) {
                 try {
-                    HttpUtil.sendJson(ex, 200, admin.health());
+                    JsonObject health = admin.health();
+                    HttpUtil.sendJson(ex, "ok".equals(health.get("status").getAsString()) ? 200 : 503, health);
                 } finally {
                     ex.close();
                 }

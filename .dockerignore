@@ -1,0 +1,9 @@
+# Keep Git metadata, local secrets and generated data out of the runtime image.
+.git
+**/.env
+**/.env.*
+backend/out
+backend/uploads
+backend/test
+**/__pycache__
+**/*.pyc
