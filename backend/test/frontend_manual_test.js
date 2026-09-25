@@ -122,6 +122,34 @@ const event = {preventDefault() {}, target: form};
     'unverified online payment must not credit wallet');
 
   assert.deepEqual(seed.drivers.map(d => d.id), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual([...new Set(seed.drivers.map(d => d.city))].sort(),
+    ['Dera Ghazi Khan', 'Islamabad', 'Karachi', 'Lahore']);
+  const manageStart = js.lastIndexOf('function manageOrder(');
+  const manageEnd = js.indexOf('async function v3LoadOrderDocs(', manageStart);
+  assert.ok(manageStart >= 0 && manageEnd > manageStart);
+  const order = {id: 'QA-BRANCH', name: 'QA', phone: '', email: '', destination: '',
+    status: 'Confirmed', totals: {rental: 0, deposit: 0, total: 0},
+    items: [{carId: 4, city: 'Lahore', service: 'With driver',
+      start: '2026-10-01', end: '2026-10-02'}]};
+  const branchCtx = vm.createContext({orders: [order], drivers: seed.drivers,
+    modal: (_, html) => {modalHtml = html}, date: s => s, esc: s => s,
+    carBy: () => ({name: 'City Car'}), driverFree: d => d.active,
+    priceLines: () => '', setTimeout: () => 0});
+  vm.runInContext(js.slice(manageStart, manageEnd), branchCtx);
+  for(const city of ['Lahore', 'Islamabad', 'Karachi', 'Dera Ghazi Khan']){
+    order.items[0].city = city;
+    branchCtx.manageOrder(order.id);
+    const selector = modalHtml.match(/<select id="v3-driver-sel-0"[^>]*>(.*?)<\/select>/);
+    assert.ok(selector, `driver selector for ${city}`);
+    const ids = [...selector[1].matchAll(/<option value="(\d+)"/g)].map(x => Number(x[1]));
+    assert.deepEqual(ids, seed.drivers.filter(d => d.city === city).map(d => d.id),
+      `only ${city} branch drivers may be offered`);
+  }
+  order.items[0].city = 'Lahore';
+  order.items[0].assignedDriver = 4; // Preserve an existing legacy cross-city assignment.
+  branchCtx.manageOrder(order.id);
+  assert.match(modalHtml, /<option value="4" selected/);
+  assert.doesNotMatch(modalHtml, /<option value="6"/);
   assert.match(css, /\.trust-track\{[^}]*animation:apexMarquee/);
   assert.match(css, /body:not\(\.page-admin\) \.cars \.car:hover \.car-photo \.car-photo-main[^}]*scale\(1\.035\)/);
   assert.match(css, /\.cars \.car \.car-photo img\.car-photo-main\{[^}]*inset:0[^}]*object-fit:contain/);
@@ -141,5 +169,5 @@ const event = {preventDefault() {}, target: form};
   assert.equal((layers.match(/src="assets\/test\.jpg"/g) || []).length, 2);
   vm.runInContext(js.slice(js.indexOf('function footer(){'), js.indexOf('function searchForm(){')), ctx);
   assert.match(ctx.footer(), /Developed by <strong class="footer-spidy">Spidy<\/strong> <span class="footer-spider" role="img" aria-label="🕷️ Spider emoji"><svg/);
-  console.log('PASS: walk-in CNIC, seven seeds, full-width photo cards and red Spidy footer');
+  console.log('PASS: walk-in CNIC, seven branch-city drivers and assignments, full-width photo cards and red Spidy footer');
 })().catch(error => { console.error(error); process.exitCode = 1; });

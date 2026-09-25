@@ -96,7 +96,10 @@ check("customer on admin endpoint 403", s == 403, f"{s}")
 
 print("== 3. Bootstrap ==")
 s, seeded_drivers = req("GET", "/api/drivers")
-check("seven seeded drivers", s == 200 and [d.get("id") for d in seeded_drivers] == list(range(1, 8)), f"{s} {seeded_drivers}")
+check("seven seeded drivers at branch cities", s == 200 and
+      [d.get("id") for d in seeded_drivers] == list(range(1, 8)) and
+      {d.get("city") for d in seeded_drivers} ==
+      {"Lahore", "Islamabad", "Karachi", "Dera Ghazi Khan"}, f"{s} {seeded_drivers}")
 s, b = req("GET", "/api/bootstrap")
 check("public bootstrap fleet", s == 200 and len(b.get("fleet", [])) == 13, f"{s} fleet={len(b.get('fleet', [])) if isinstance(b, dict) else b}")
 check("public bootstrap config", isinstance(b.get("config"), dict) and b["config"].get("driverRate", 0) > 0, f"{b.get('config') if isinstance(b, dict) else b}")
@@ -249,6 +252,9 @@ check("application alert links to exact application", s == 200 and any(n.get("li
 print("== 6. Banned CNIC ==")
 s, b = req("POST", "/api/banned-cnic", {"cnic": "9990001112223"}, token=admin)
 check("ban cnic 201", s == 201, f"{s} {b}")
+s, refreshed = req("GET", "/api/bootstrap", token=admin)
+check("admin refresh retains banned CNIC", s == 200 and
+      any(x.get("cnic") == "9990001112223" for x in refreshed.get("bannedCNICs", [])), f"{s} {refreshed.get('bannedCNICs')}")
 s, b = req("POST", "/api/banned-cnic", {"cnic": "123"}, token=admin)
 check("ban bad cnic 422", s == 422, f"{s}")
 d3 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 20))
@@ -258,6 +264,9 @@ s, b = req("GET", "/api/banned-cnic")
 check("public banned list", s == 200 and any(x.get("cnic") == "9990001112223" for x in b), f"{s} {b}")
 s, b = req("DELETE", "/api/banned-cnic/9990001112223", token=admin)
 check("unban 200", s == 200, f"{s}")
+s, refreshed = req("GET", "/api/bootstrap", token=admin)
+check("admin refresh retains unban", s == 200 and
+      not any(x.get("cnic") == "9990001112223" for x in refreshed.get("bannedCNICs", [])), f"{s} {refreshed.get('bannedCNICs')}")
 
 print("== 7. Documents ==")
 data_url = "data:image/png;base64," + __import__("base64").b64encode(png_bytes()).decode()

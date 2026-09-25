@@ -28,7 +28,12 @@ const defaultConfig={driverRate:4500,overtime:500,jazzCashNumber:'0300-1234567',
 let config={...defaultConfig,...read('config',{})};
 let adminWallet=read('adminWallet',0);
 let ownerWallets=read('ownerWallets',{});
-let bannedCNICs=read('bannedCNICs',[]);
+function normalizeBannedCNICs(entries){
+  if(!Array.isArray(entries))return [];
+  return [...new Set(entries.map(entry=>typeof entry==='string'?entry:entry?.cnic)
+    .filter(cnic=>typeof cnic==='string'&&/^[0-9]{13}$/.test(cnic)))];
+}
+let bannedCNICs=normalizeBannedCNICs(read('bannedCNICs',[]));
 const defaultFleet=[
 {id:1,name:'Porsche Panamera',brand:'Porsche',category:'Grand touring',image:'porsche',year:2025,rate:65000,seats:4,engine:'2.9L twin-turbo V6',power:'348 hp',fuel:'Petrol',km:'12,400 km',color:'Jet Black',plate:'LEA-901',condition:'Excellent',status:'Active',deposit:100000,features:['Adaptive air suspension','Premium leather interior','Panoramic sunroof','Apple CarPlay','360° parking camera','Dual-zone climate control'],origin:'Premium'},
 {id:2,name:'Mercedes-AMG GT',brand:'Mercedes-Benz',category:'Sports',image:'mercedes',year:2024,rate:85000,seats:2,engine:'4.0L biturbo V8',power:'469 hp',fuel:'Petrol',km:'9,800 km',color:'Selenite Silver',plate:'LEA-002',condition:'Excellent',status:'Active',deposit:150000,features:['AMG performance seats','Burmester sound system','Sport driving modes','Premium leather cockpit','Rear parking camera','Automatic climate control'],origin:'Premium'},
@@ -48,7 +53,7 @@ let fleet=read('fleet',defaultFleet);
 // An empty/short catalog can be intentional (or an unsaved admin edit).
 // Do not silently re-add deleted cars from defaults on a refresh.
 if(!Array.isArray(fleet)){fleet=defaultFleet;write('fleet',fleet);}
-let drivers=read('drivers',[{id:1,name:'Ali Raza',phone:'+92 300 0000101',city:'Lahore',experience:8,license:'LHR-xxx102',active:true},{id:2,name:'Imran Shah',phone:'+92 300 0000102',city:'Islamabad',experience:11,license:'ISB-xxx209',active:true},{id:3,name:'Bilal Ahmed',phone:'+92 300 0000103',city:'Karachi',experience:6,license:'KHI-xxx311',active:false},{id:4,name:'Farhan Malik',phone:'+92 300 0000104',city:'Rawalpindi',experience:7,license:'RWP-xxx412',active:true},{id:5,name:'Hamza Khan',phone:'+92 300 0000105',city:'Lahore',experience:5,license:'LHR-xxx527',active:true},{id:6,name:'Asad Mahmood',phone:'+92 300 0000106',city:'Faisalabad',experience:9,license:'FSD-xxx639',active:true},{id:7,name:'Danish Iqbal',phone:'+92 300 0000107',city:'Islamabad',experience:6,license:'ISB-xxx746',active:true}]);
+let drivers=read('drivers',[{id:1,name:'Ali Raza',phone:'+92 300 0000101',city:'Lahore',experience:8,license:'LHR-xxx102',active:true},{id:2,name:'Imran Shah',phone:'+92 300 0000102',city:'Islamabad',experience:11,license:'ISB-xxx209',active:true},{id:3,name:'Bilal Ahmed',phone:'+92 300 0000103',city:'Karachi',experience:6,license:'KHI-xxx311',active:false},{id:4,name:'Farhan Malik',phone:'+92 300 0000104',city:'Dera Ghazi Khan',experience:7,license:'RWP-xxx412',active:true},{id:5,name:'Hamza Khan',phone:'+92 300 0000105',city:'Lahore',experience:5,license:'LHR-xxx527',active:true},{id:6,name:'Asad Mahmood',phone:'+92 300 0000106',city:'Karachi',experience:9,license:'FSD-xxx639',active:true},{id:7,name:'Danish Iqbal',phone:'+92 300 0000107',city:'Islamabad',experience:6,license:'ISB-xxx746',active:true}]);
 let orders=read('orders',[]),applications=read('applications',[]),account=read('session',null),cart=read('cart',[]);
 let users=read('users',[]);
 let notifications=read('notifications',[]);
@@ -65,7 +70,7 @@ function adminTabFromHash(){
   try { const tab=decodeURIComponent(location.hash.slice(1)); return ADMIN_TABS.includes(tab)?tab:'Overview'; }
   catch(e){ return 'Overview'; }
 }
-let route='',category='All cars',sort='Recommended',galleryIndex=0,currentCar=1,checkoutStep=1,checkoutInfo={},payment='Cash on pickup',adminTab='Overview',adminQuery='',notifOpen=false,chatOpen=false,activeChatUser=null,adminInboxExpanded=false;
+let route='',category='All cars',sort='Recommended',galleryIndex=0,currentCar=1,checkoutStep=1,checkoutInfo={},payment='Cash on pickup',adminTab='Overview',adminQuery='',notifOpen=false,chatOpen=false,activeChatUser=null,adminInboxExpanded=false,adminSiteInboxOpen=false;
 let isAdmin=!!window.ADMIN_MODE||location.pathname.endsWith('/admin.html');
 if(isAdmin)adminTab=adminTabFromHash();
 let adminSession=read('adminSession',null);
@@ -169,10 +174,35 @@ function submitUserChat(e){
   input.disabled=true;
   Promise.resolve(sendUserChat(txt)).then(sent=>{if(sent)input.value='';}).finally(()=>{input.disabled=false;input.focus();});
 }
+function messageIcon(){return '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.5a8.5 8.5 0 0 1-8.5 8.5 8.7 8.7 0 0 1-3.7-.8L3 21l1.8-5.3a8.5 8.5 0 1 1 15.7-4.2Z"/><path d="M8 11.5h8"/></svg>'}
+function adminUnreadChats(){return chats.reduce((total,c)=>total+(Number(c.unreadAdmin)||0),0)}
+function toggleAdminSiteInbox(){
+  adminSiteInboxOpen=!adminSiteInboxOpen;
+  const panel=document.getElementById('admin-site-chat-panel');
+  panel?.classList.toggle('open',adminSiteInboxOpen);
+  panel?.setAttribute('aria-hidden',String(!adminSiteInboxOpen));
+  const button=document.querySelector('.admin-message-fab');
+  button?.setAttribute('aria-expanded',String(adminSiteInboxOpen));
+  if(adminSiteInboxOpen)paintAdminInbox();
+  else button?.focus();
+}
+function openAdminMessages(){
+  adminInboxExpanded=true;
+  const shell=document.querySelector('.admin-inbox-shell');
+  shell?.classList.add('expanded');
+  paintAdminInbox();
+  shell?.scrollIntoView({block:'nearest'});
+  shell?.querySelector('.inbox-toggle')?.focus();
+}
 function chatWidget(){
-  if(__apexRole==='admin'&&account?.id==='admin')return '';
+  if(account?.id==='admin'){
+    // The website is still an admin's workplace. Use the same live inbox,
+    // never the customer chat composer, once the server has verified the role.
+    if(__apexRole!=='admin')return '';
+    return `<div class="chat-widget admin-site-chat"><button type="button" class="chat-fab admin-message-fab ${adminUnreadChats()?'has-unread':''}" onclick="toggleAdminSiteInbox()" aria-label="Customer messages" aria-expanded="${adminSiteInboxOpen}" aria-controls="admin-site-chat-panel" title="Customer messages">${messageIcon()}</button><div id="admin-site-chat-panel" class="chat-panel admin-site-chat-panel ${adminSiteInboxOpen?'open':''}" aria-label="Customer conversations" aria-hidden="${!adminSiteInboxOpen}"><div id="admin-site-inbox">${adminChatList()}</div></div></div>`;
+  }
   const unread=account?chats.find(c=>c.userId===account.id)?.unreadUser||0:0;
-  return `<div class="chat-widget"><button class="chat-fab ${unread?'has-unread':''}" onclick="toggleChat()" aria-label="Support messages" title="Support messages">✉</button><div id="chat-panel" class="chat-panel ${chatOpen?'open':''}"><div class="chat-header"><span>APEX Support</span><button type="button" onclick="toggleChat()" aria-label="Close chat">×</button></div><div id="chat-messages" class="chat-messages"></div><form onsubmit="submitUserChat(event)" class="chat-input"><input name="msg" placeholder="Write a message" required autocomplete="off" aria-label="Message"><button>Send</button></form></div></div>`;
+  return `<div class="chat-widget"><button type="button" class="chat-fab ${unread?'has-unread':''}" onclick="toggleChat()" aria-label="Support messages" title="Support messages">${messageIcon()}</button><div id="chat-panel" class="chat-panel ${chatOpen?'open':''}"><div class="chat-header"><span>APEX Support</span><button type="button" onclick="toggleChat()" aria-label="Close chat">×</button></div><div id="chat-messages" class="chat-messages"></div><form onsubmit="submitUserChat(event)" class="chat-input"><input name="msg" placeholder="Write a message" required autocomplete="off" aria-label="Message"><button>Send</button></form></div></div>`;
 }
 
 // --- CHARTS ---
@@ -247,7 +277,13 @@ function adminChatList(){
     <form onsubmit="submitAdminChat(event,'${encodeURIComponent(String(selected.userId)).replace(/'/g,'%27')}')" class="chat-input inbox-compose"><input id="admin-reply-input" name="msg" placeholder="Write a reply" aria-label="Reply" required autocomplete="off"><button>Send</button></form>`:'<p class="chat-empty">Customer conversations will appear here.</p>'}</section>`;
 }
 function paintAdminInbox(forceScroll=false){
-  const box=document.getElementById('admin-inbox');if(!box)return;
+  const unread=adminUnreadChats();
+  document.querySelectorAll('.admin-message-btn,.admin-message-fab').forEach(button=>{
+    button.classList.toggle('has-unread',!!unread);
+    button.setAttribute('aria-label','Customer messages'+(unread?' ('+unread+' unread)':''));
+  });
+  const box=document.getElementById('admin-inbox')||document.getElementById('admin-site-inbox');
+  if(!box)return;
   const oldInput=box.querySelector?.('#admin-reply-input');
   const draft=oldInput?.value||'';
   const focused=oldInput&&document.activeElement===oldInput;
@@ -578,8 +614,30 @@ async function confirmCancel(id){const o=orders.find(x=>x.id===id);if(!o)return;
   if(o.paid>0){const refund=o.paid-fee;addNotification(o.userId,'Booking cancelled — 5% fee','Your booking '+id+' cancelled. Fee '+money(fee)+' deducted, refund '+(refund>0?money(refund):money(0)),'account');}
   else{addNotification(o.userId,'Booking cancelled','Your booking '+id+' cancelled. 5% fee '+money(fee)+' applied.','account');}
   persist();closeModal();render();toast('Cancelled — 5% fee '+money(fee)+' to admin wallet');}
-function banCNIC(cnic){if(!cnic) return; if(!bannedCNICs.includes(cnic)){bannedCNICs.push(cnic); persist(); toast('CNIC '+cnic+' banned'); render();}}
-function unbanCNIC(cnic){bannedCNICs=bannedCNICs.filter(x=>x!==cnic); persist(); toast('CNIC '+cnic+' unbanned'); render();}
+let __apexBanBusy=false;
+async function changeCNICBan(input,ban){
+  const cnic=String(input||'').replace(/[\s-]/g,'');
+  if(!/^[0-9]{13}$/.test(cnic))return toast('Enter a valid 13-digit CNIC.');
+  if(__apexBanBusy)return;
+  if(bannedCNICs.includes(cnic)===ban)return toast('CNIC '+cnic+(ban?' is already banned.':' is not banned.'));
+  if(v3Online()){
+    if(!isAdminAuthenticated()||__apexRole!=='admin'||!__apexToken||!__apexServerReady)
+      return toast('Sign in as admin to update the banned CNIC list.');
+    __apexBanBusy=true;
+    try{
+      await v3Api(ban?'/api/banned-cnic':'/api/banned-cnic/'+encodeURIComponent(cnic),
+        ban?{method:'POST',body:JSON.stringify({cnic})}:{method:'DELETE'});
+      // The dedicated endpoints persist each change atomically, without a
+      // stale browser replacing another admin's bans through /api/sync.
+      try{bannedCNICs=normalizeBannedCNICs(await v3Api('/api/banned-cnic'));}
+      catch(e){bannedCNICs=normalizeBannedCNICs(ban?[...bannedCNICs,cnic]:bannedCNICs.filter(x=>x!==cnic));}
+    }catch(e){toast('CNIC '+(ban?'ban':'unban')+' failed: '+e.message);return}
+    finally{__apexBanBusy=false;}
+  }else bannedCNICs=normalizeBannedCNICs(ban?[...bannedCNICs,cnic]:bannedCNICs.filter(x=>x!==cnic));
+  write('bannedCNICs',bannedCNICs);render();toast('CNIC '+cnic+(ban?' banned.':' unbanned.'));
+}
+function banCNIC(cnic){return changeCNICBan(cnic,true)}
+function unbanCNIC(cnic){return changeCNICBan(cnic,false)}
 function adminManualBooking(){
   window.__v3ManualDocs={};
   modal('Walk-in booking', `<form onsubmit="submitManualBooking(event)"><div class="formgrid">
@@ -757,7 +815,8 @@ function adminContent(){
 function adminShell(){
   if(!isAdminAuthenticated())return `<div class="wrap">${adminLoginPage()}</div>`;
   const unread=viewerNotifications().some(n=>!n.read);
-  return `<div class="wrap admin-wrap"><header class="admin-top"><a class="logo" href="#Overview"><span class="apex-mark"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 2 L22 22 H2 Z" fill="currentColor"/></svg></span> APEX <sup>OPERATIONS</sup></a><div class="admin-head-actions"><a href="index.html" class="btn ghost" title="View website">View website ↗</a><button id="notif-btn" class="notif-btn ${unread?'has-unread':''}" onclick="toggleNotif()" aria-label="Notifications" aria-expanded="${notifOpen}" title="Notifications"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 6 7 6 11H0s6-4 6-11"/><path d="M9 21a3 3 0 0 0 6 0"/></svg></button><div id="notif-dropdown" class="notif-dropdown ${notifOpen?'open':''}">${notificationMenu()}</div><button class="btn ghost" onclick="adminLogout()">Sign out</button></div></header><div class="page-top admin-heading"><div class="eyebrow">OPERATIONS</div><h1>${adminTab==='Overview'?'Dashboard':esc(adminTab)}</h1></div><nav class="admin-tabs" aria-label="Operations sections">${ADMIN_TABS.map(t=>`<button class="chip ${adminTab===t?'selected':''}" onclick="goAdminTab('${t}')">${t}${t==='Partner applications'&&applications.filter(a=>a.status==='Submitted').length?' · '+applications.filter(a=>a.status==='Submitted').length:''}</button>`).join('')}</nav><div class="admin-workspace"><main class="admin-content" id="admin-${adminTab.toLowerCase().replace(/\s+/g,'-')}">${adminContent()}</main><aside class="admin-inbox-shell ${adminInboxExpanded?'expanded':''}" aria-label="Support conversations"><div id="admin-inbox">${adminChatList()}</div></aside></div></div>`;
+  const unreadMessages=adminUnreadChats();
+  return `<div class="wrap admin-wrap"><header class="admin-top"><a class="logo" href="#Overview"><span class="apex-mark"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 2 L22 22 H2 Z" fill="currentColor"/></svg></span> APEX <sup>OPERATIONS</sup></a><div class="admin-head-actions"><a href="index.html" class="btn ghost" title="View website">View website ↗</a><button type="button" id="admin-message-btn" class="notif-btn admin-message-btn ${unreadMessages?'has-unread':''}" onclick="openAdminMessages()" aria-label="Customer messages${unreadMessages?' ('+unreadMessages+' unread)':''}" title="Customer messages">${messageIcon()}</button><button id="notif-btn" class="notif-btn ${unread?'has-unread':''}" onclick="toggleNotif()" aria-label="Notifications" aria-expanded="${notifOpen}" title="Notifications"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 7 6 7 6 11H0s6-4 6-11"/><path d="M9 21a3 3 0 0 0 6 0"/></svg></button><div id="notif-dropdown" class="notif-dropdown ${notifOpen?'open':''}">${notificationMenu()}</div><button class="btn ghost" onclick="adminLogout()">Sign out</button></div></header><div class="page-top admin-heading"><div class="eyebrow">OPERATIONS</div><h1>${adminTab==='Overview'?'Dashboard':esc(adminTab)}</h1></div><nav class="admin-tabs" aria-label="Operations sections">${ADMIN_TABS.map(t=>`<button class="chip ${adminTab===t?'selected':''}" onclick="goAdminTab('${t}')">${t}${t==='Partner applications'&&applications.filter(a=>a.status==='Submitted').length?' · '+applications.filter(a=>a.status==='Submitted').length:''}</button>`).join('')}</nav><div class="admin-workspace"><main class="admin-content" id="admin-${adminTab.toLowerCase().replace(/\s+/g,'-')}">${adminContent()}</main><aside class="admin-inbox-shell ${adminInboxExpanded?'expanded':''}" aria-label="Support conversations"><div id="admin-inbox">${adminChatList()}</div></aside></div></div>`;
 }
 
 function adminSearch(v){adminQuery=v;document.getElementById('admin-bookings').innerHTML=adminBookings(orders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(v.toLowerCase())))}
@@ -866,12 +925,14 @@ let __apexToken=read('apiToken',null);
 if(v3Online()&&!__apexToken&&!isAdmin&&account){account=null;store.removeItem('v2_session');}
 function apexHeaders(withJson){const h={};if(withJson)h['Content-Type']='application/json';if(__apexToken)h['Authorization']='Bearer '+__apexToken;return h;}
 function apexClearToken(){__apexToken=null;__apexRole=null;store.removeItem('v2_apiToken');}
-const __apexSyncKeys=['fleet','drivers','users','orders','applications','notifications','chats','bannedCNICs','config'];
+// Bans use their own atomic POST/DELETE API; never replace the list through
+// full-state sync, which could wipe another admin's freshly created ban.
+const __apexSyncKeys=['fleet','drivers','users','orders','applications','notifications','chats','config'];
 const __apexMergeKeys=new Set(['users','orders','applications','notifications','chats']);
 let __apexBaseline={};
 let __apexSending=false;
 let __apexPushT=null;
-function apexSyncState(){return {fleet,drivers,users,orders,applications,notifications,chats,bannedCNICs,config};}
+function apexSyncState(){return {fleet,drivers,users,orders,applications,notifications,chats,config};}
 function apexPendingKeys(){const keys=read('apexPendingSyncKeys',[]);return Array.isArray(keys)?keys.filter(k=>__apexSyncKeys.includes(k)):[];}
 function apexRememberPending(keys){write('apexPendingSyncKeys',[...new Set([...apexPendingKeys(),...keys])]);}
 function apexChangedKeys(){const state=apexSyncState();return __apexSyncKeys.filter(k=>JSON.stringify(state[k])!==__apexBaseline[k]);}
@@ -1268,7 +1329,7 @@ function apexAssignSyncKey(key,value){
     case 'fleet':fleet=value;break;case 'drivers':drivers=value;break;
     case 'users':users=value;break;case 'orders':orders=value;break;
     case 'applications':applications=value;break;case 'notifications':notifications=value;break;
-    case 'chats':chats=value;break;case 'bannedCNICs':bannedCNICs=value;break;
+    case 'chats':chats=value;break;
     case 'config':config=value;break;
   }
 }
@@ -1309,6 +1370,7 @@ function v3RefreshBootstrap(){
         if(s.config&&typeof s.config==='object'&&!Array.isArray(s.config))config={...defaultConfig,...s.config};
       }else if(Array.isArray(s[key]))apexAssignSyncKey(key,s[key]);
     }
+    if(Array.isArray(s.bannedCNICs))bannedCNICs=normalizeBannedCNICs(s.bannedCNICs);
     if(typeof s.adminWallet==='number')adminWallet=s.adminWallet;
     else if(typeof s.adminWallet?.balance==='number')adminWallet=s.adminWallet.balance;
     if(s.ownerWallets)ownerWallets=s.ownerWallets;
@@ -1376,7 +1438,7 @@ async function apexPollLive(){
       const next=pending?apexMergeById(data.chats,chats):data.chats;
       if(JSON.stringify(next)!==JSON.stringify(chats)){
         chats=next;write('chats',chats);
-        if(isAdmin)paintAdminInbox();else paintCustomerChat();
+        if(__apexRole==='admin')paintAdminInbox();else paintCustomerChat();
       }
       if(isAdmin&&__apexServerReady&&!pending)__apexBaseline.chats=JSON.stringify(chats);
     }
@@ -1520,7 +1582,7 @@ function manageOrder(id){
   const o=orders.find(o=>o.id===id);
   const payRow=o.paymentStatus?`<div class="info-box"><small>Payment status</small><b>${esc(o.paymentStatus)}</b></div>`:'';
   const settle=o.status==='Completed'&&o.extraCharges?`<div class="notice">Late return: ${o.extraHours||0} extra hour(s) — charges ${money(o.extraCharges)} · Final ${money(o.finalAmount||o.totals.total)}</div>`:'';
-  modal('Reservation '+id,`<span class="pill">${o.status}</span> ${o.paymentStatus?`<span class="pill" style="margin-left:6px">${esc(o.paymentStatus)}</span>`:''}<div class="info-grid" style="margin-top:12px">${[['Renter',o.name],['Phone',o.phone],['Email',o.email],['CNIC docs',o.identityDocs?'Uploaded ('+o.identityDocs.length+')':'None'],['Destination',o.destination]].map(([k,v])=>`<div class="info-box"><small>${k}</small><b>${esc(String(v))}</b></div>`).join('')}${payRow}</div><div id="v3-order-docs" style="margin:10px 0"></div>${o.items.map((i,n)=>`<div class="panel" style="margin-bottom:15px"><h3 style="font-size:17px">${esc(carBy(i.carId).name)}</h3><p class="small muted">${date(i.start)} ${i.startTime||''} — ${date(i.end)} ${i.endTime||''} · ${esc(i.city)} · ${esc(i.service)}</p>${i.service==='With driver'?`<label>Assign chauffeur</label><select id="v3-driver-sel-${n}" onchange="assignDriver('${id}',${n},this.value)"><option value="">Not assigned</option>${drivers.map(d=>{const free=driverFree(d,i.start,i.end,id,n);return `<option value="${d.id}" ${i.assignedDriver===d.id?'selected':''} ${!free?'disabled':''}>${esc(d.name)} · ${esc(d.city)} · ${free?'Available':'Busy'}</option>`}).join('')}</select>`:''}</div>`).join('')}${priceLines(o.totals)}${settle}${o.status==='Pickup Pending'?`<div class="notice" style="background:#fffbe6;border-color:#f5e6a0;color:#7a5a00">Payment verified / cash booking — confirm the handover to start the rental.</div><div class="button-row"><button class="btn" onclick="v3Pickup('${id}')">✔ Confirm pickup — start rental</button></div>`:''}${o.status==='Active'?`<div class="panel" style="background:var(--bg-2);margin-top:10px"><label>Actual return date/time (late charges use grace ${v3Grace()} min)</label><input type="datetime-local" id="v3-return-dt" value="${v3NowLocal()}"><div class="button-row" style="margin-top:10px"><button class="btn" onclick="v3Return('${id}')">✔ Confirm return & settle</button></div></div>`:''}<div class="button-row" style="margin-top:12px">${o.status==='Confirmed'?`<button class="btn" onclick="startOrder('${id}')">Start rental</button>`:''}<button class="btn ghost" onclick="cancelOrder('${id}')">Cancel</button></div>`,true);
+  modal('Reservation '+id,`<span class="pill">${o.status}</span> ${o.paymentStatus?`<span class="pill" style="margin-left:6px">${esc(o.paymentStatus)}</span>`:''}<div class="info-grid" style="margin-top:12px">${[['Renter',o.name],['Phone',o.phone],['Email',o.email],['CNIC docs',o.identityDocs?'Uploaded ('+o.identityDocs.length+')':'None'],['Destination',o.destination]].map(([k,v])=>`<div class="info-box"><small>${k}</small><b>${esc(String(v))}</b></div>`).join('')}${payRow}</div><div id="v3-order-docs" style="margin:10px 0"></div>${o.items.map((i,n)=>`<div class="panel" style="margin-bottom:15px"><h3 style="font-size:17px">${esc(carBy(i.carId).name)}</h3><p class="small muted">${date(i.start)} ${i.startTime||''} — ${date(i.end)} ${i.endTime||''} · ${esc(i.city)} · ${esc(i.service)}</p>${i.service==='With driver'?`<label>Assign chauffeur · ${esc(i.city)} branch</label><select id="v3-driver-sel-${n}" onchange="assignDriver('${id}',${n},this.value)"><option value="">Not assigned</option>${drivers.filter(d=>d.city===i.city||d.id===i.assignedDriver).map(d=>{const free=driverFree(d,i.start,i.end,id,n);return `<option value="${d.id}" ${i.assignedDriver===d.id?'selected':''} ${!free?'disabled':''}>${esc(d.name)} · ${esc(d.city)} · ${free?'Available':'Busy'}</option>`}).join('')}</select>`:''}</div>`).join('')}${priceLines(o.totals)}${settle}${o.status==='Pickup Pending'?`<div class="notice" style="background:#fffbe6;border-color:#f5e6a0;color:#7a5a00">Payment verified / cash booking — confirm the handover to start the rental.</div><div class="button-row"><button class="btn" onclick="v3Pickup('${id}')">✔ Confirm pickup — start rental</button></div>`:''}${o.status==='Active'?`<div class="panel" style="background:var(--bg-2);margin-top:10px"><label>Actual return date/time (late charges use grace ${v3Grace()} min)</label><input type="datetime-local" id="v3-return-dt" value="${v3NowLocal()}"><div class="button-row" style="margin-top:10px"><button class="btn" onclick="v3Return('${id}')">✔ Confirm return & settle</button></div></div>`:''}<div class="button-row" style="margin-top:12px">${o.status==='Confirmed'?`<button class="btn" onclick="startOrder('${id}')">Start rental</button>`:''}<button class="btn ghost" onclick="cancelOrder('${id}')">Cancel</button></div>`,true);
   setTimeout(()=>v3LoadOrderDocs(o),60);
 }
 async function v3LoadOrderDocs(o){

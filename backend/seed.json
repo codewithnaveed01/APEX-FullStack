@@ -53,7 +53,7 @@
    "id": 4,
    "name": "Farhan Malik",
    "phone": "+92 300 0000104",
-   "city": "Rawalpindi",
+   "city": "Dera Ghazi Khan",
    "experience": 7,
    "license": "RWP-xxx412",
    "active": true
@@ -71,7 +71,7 @@
    "id": 6,
    "name": "Asad Mahmood",
    "phone": "+92 300 0000106",
-   "city": "Faisalabad",
+   "city": "Karachi",
    "experience": 9,
    "license": "FSD-xxx639",
    "active": true

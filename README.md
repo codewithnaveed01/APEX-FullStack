@@ -33,12 +33,18 @@ railway.json         legacy Railway config for existing services (new services: 
   reviews, app_settings.
 - **`migrations/002_add_seed_drivers.sql`** — adds four drivers on existing installations
   without overwriting admin edits; a fresh installation seeds all seven from `seed.json`.
+- **`migrations/003_align_default_driver_branches.sql`** — aligns only untouched seed
+  drivers with Lahore, Islamabad, Karachi and Dera Ghazi Khan; admin-edited drivers
+  and the seven-driver total are preserved.
 
 Money is **always computed server-side** from `cars.rate` / `hourly_rate` / settings —
 client-sent prices are never trusted. Receipt upload → `Pending Verification`; only an
 admin action verifies (credits wallet) / rejects / requests re-upload. Walk-in
 bookings require both CNIC sides; photos are stored privately, linked to the
-booking, and are not automatically marked verified.
+booking, and are not automatically marked verified. Admin messages remain available
+in the dashboard inbox and from the message button on the public-facing site.
+Banning/unbanning a CNIC uses the server's atomic endpoints; the saved list is
+reloaded from the database after a refresh instead of a stale browser cache.
 
 ## Local run (no Docker)
 
@@ -81,6 +87,7 @@ node backend/test/frontend_date_test.js
 node backend/test/frontend_live_test.js
 node backend/test/frontend_availability_test.js
 node backend/test/frontend_manual_test.js
+node backend/test/frontend_admin_support_ban_test.js
 
 # With a LOCAL PostgreSQL URL accessible from the host and JDK 17 installed:
 bash backend/build.sh
