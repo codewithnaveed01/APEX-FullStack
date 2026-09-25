@@ -55,6 +55,7 @@ public final class Main {
         new DocumentController(app).register(router);
         new ReviewController(app).register(router);
         new ChatController(app).register(router);
+        new NotificationController(app).register(router);
         new SettingsController(app).register(router);
 
         StaticHandler statics = new StaticHandler(cfg.staticDir);

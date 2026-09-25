@@ -52,6 +52,14 @@ public final class PaymentController {
             HttpUtil.sendJson(ctx.ex, 200, app.paymentService.walletInfo());
         });
 
+        r.get("/api/wallet/mine", Router.Level.ANY, ctx -> {
+            String userId = Json.getStr(ctx.session, "userId", "");
+            long balance = app.db.with(c -> app.wallet.ownerBalance(c, userId));
+            JsonObject result = new JsonObject();
+            result.addProperty("balance", balance);
+            HttpUtil.sendJson(ctx.ex, 200, result);
+        });
+
         r.post("/api/wallet/add-cash", Router.Level.ADMIN, ctx -> {
             JsonObject o = app.paymentService.addCash(ctx.session, ctx.body);
             HttpUtil.sendJson(ctx.ex, 200, o);

@@ -66,10 +66,10 @@ public final class PaymentService {
 
             notifs.notifyAdmins(c, "Payment verification needed",
                     b.customerName + " submitted " + amount + " PKR (" + method + ", TID " + tid +
-                            ") for booking " + b.id, "account", "Payments");
+                            ") for booking " + b.id, "booking/" + b.id, "Payments");
             notifs.notify(c, b.userId, "Payment submitted",
                     "Your payment of " + amount + " PKR for booking " + b.id +
-                            " is pending admin verification.", "account", null);
+                    " is pending admin verification.", "booking/" + b.id, null);
             JsonObject o = new JsonObject();
             o.addProperty("id", id);
             o.addProperty("status", "Pending Verification");
@@ -113,7 +113,7 @@ public final class PaymentService {
                                         " has been verified. " +
                                         ("Pickup Pending".equals(b.data.get("status").getAsString())
                                                 ? "Your vehicle is ready for pickup." : ""),
-                                "account", null);
+                                "booking/" + bookingId, null);
                     }
                     break;
                 }
@@ -125,7 +125,7 @@ public final class PaymentService {
                         bookings.upsert(c, b);
                         notifs.notify(c, b.userId, "Payment rejected",
                                 "Payment for booking " + bookingId + " was rejected." +
-                                        (note.isEmpty() ? "" : " Reason: " + note), "account", null);
+                                        (note.isEmpty() ? "" : " Reason: " + note), "booking/" + bookingId, null);
                     }
                     break;
                 }
@@ -137,7 +137,7 @@ public final class PaymentService {
                         bookings.upsert(c, b);
                         notifs.notify(c, b.userId, "Payment receipt needs re-upload",
                                 "Please re-upload a valid payment receipt for booking " + bookingId +
-                                        (note.isEmpty() ? "" : ". " + note), "account", null);
+                                        (note.isEmpty() ? "" : ". " + note), "booking/" + bookingId, null);
                     }
                     break;
                 }

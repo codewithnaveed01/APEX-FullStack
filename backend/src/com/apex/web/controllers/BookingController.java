@@ -7,6 +7,7 @@ import com.apex.util.Validation;
 import com.apex.web.ApiException;
 import com.apex.web.HttpUtil;
 import com.apex.web.Router;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 /**
@@ -111,6 +112,21 @@ public final class BookingController {
             String end = Json.clean(ctx.query.get("end"));
             JsonObject a = app.bookingService.availability(carId, start, end);
             HttpUtil.sendJson(ctx.ex, 200, a);
+        });
+
+        r.get("/api/availability/fleet", Router.Level.PUBLIC, ctx -> {
+            String start = Json.clean(ctx.query.get("start"));
+            String end = Json.clean(ctx.query.get("end"));
+            if (!start.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}") ||
+                    !end.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}") ||
+                    end.compareTo(start) <= 0) {
+                throw ApiException.validation("Provide a valid start and end date/time");
+            }
+            JsonArray ids = new JsonArray();
+            for (long id : app.bookings.rentedCarIds(start, end)) ids.add(id);
+            JsonObject result = new JsonObject();
+            result.add("rentedIds", ids);
+            HttpUtil.sendJson(ctx.ex, 200, result);
         });
     }
 }

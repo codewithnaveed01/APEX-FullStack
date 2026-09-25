@@ -271,11 +271,11 @@ public final class BookingService {
 
             notifs.notifyAdmins(c, "New booking " + b.id,
                     name + " booked " + itemCount(items) + " vehicle(s) - " + start + " to " + end,
-                    "account", "Bookings");
+                    "booking/" + b.id, "Reservations");
             notifs.notify(c, userId, "Booking received",
                     "Your booking " + b.id + " has been received. " +
                     (cashPayment(fPayment) ? "Payment is due at pickup." : "Please upload your payment receipt."),
-                    "account", null);
+                    "booking/" + b.id, null);
             return order;
         });
     }
@@ -308,9 +308,10 @@ public final class BookingService {
             notifs.notify(c, b.userId, "Booking cancelled",
                     "Booking " + b.id + " was cancelled." +
                     (fee > 0 ? " A 5% cancellation fee of " + fee + " PKR applies." : ""),
-                    "account", null);
+                    "booking/" + b.id, null);
             notifs.notifyAdmins(c, "Booking cancelled: " + b.id,
-                    b.customerName + " - " + (fee > 0 ? "fee " + fee : "no fee"), "account", "Bookings");
+                    b.customerName + " - " + (fee > 0 ? "fee " + fee : "no fee"),
+                    "booking/" + b.id, "Reservations");
             return b.data;
         });
     }
@@ -337,7 +338,7 @@ public final class BookingService {
             b.data.addProperty("pickupAt", AuthService.nowIso());
             bookings.upsert(c, b);
             notifs.notify(c, b.userId, "Vehicle picked up",
-                    "Your booking " + b.id + " is now active. Enjoy the ride!", "account", null);
+                    "Your booking " + b.id + " is now active. Enjoy the ride!", "booking/" + b.id, null);
             return b.data;
         });
     }
@@ -415,10 +416,10 @@ public final class BookingService {
                             ? " " + late.extraHours + " late hour(s) after " + grace + " min grace - " +
                               late.charges + " PKR late charges apply."
                             : " Thank you for choosing APEX!"),
-                    "account", null);
+                    "booking/" + b.id, null);
             notifs.notifyAdmins(c, "Booking completed: " + b.id,
                     b.customerName + (late.charges > 0 ? " - late charges " + late.charges : ""),
-                    "account", "Bookings");
+                    "booking/" + b.id, "Reservations");
             return b.data;
         });
     }

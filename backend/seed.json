@@ -165,7 +165,7 @@
     "Central locking"
    ],
    "origin": "Pakistan",
-   "marketNote": "Economy hatchback - most rented city car. Rate from public listings Sep 2026.",
+   "marketNote": "Compact automatic hatchback.",
    "hourlyRate": 450
   },
   {
@@ -195,7 +195,7 @@
     "Alloy wheels"
    ],
    "origin": "Pakistan",
-   "marketNote": "Popular 1000cc hatchback. Rate 4500-5000/day self-drive.",
+   "marketNote": "1000cc automatic hatchback.",
    "hourlyRate": 500
   },
   {
@@ -225,7 +225,7 @@
     "LED projector headlamps"
    ],
    "origin": "Pakistan",
-   "marketNote": "Premium hatchback. Market 5500-6500.",
+   "marketNote": "1200cc automatic hatchback.",
    "hourlyRate": 600
   },
   {
@@ -255,7 +255,7 @@
     "Rear AC vents"
    ],
    "origin": "Pakistan",
-   "marketNote": "Best-selling 1.5L sedan. Market 6000-8000/day.",
+   "marketNote": "1.5L automatic sedan.",
    "hourlyRate": 700
   },
   {
@@ -285,7 +285,7 @@
     "Dual-zone climate"
    ],
    "origin": "Pakistan",
-   "marketNote": "Premium sedan. Market 8000-15000/day.",
+   "marketNote": "Turbocharged automatic sedan.",
    "hourlyRate": 1200
   },
   {
@@ -315,7 +315,7 @@
     "Climate control"
    ],
    "origin": "Pakistan",
-   "marketNote": "Most trusted sedan. Market 7000-8000.",
+   "marketNote": "1.8L automatic sedan.",
    "hourlyRate": 800
   },
   {
@@ -345,7 +345,7 @@
     "Parking sensors"
    ],
    "origin": "Pakistan",
-   "marketNote": "Compact sedan. Market 6500-7000/day.",
+   "marketNote": "1.5L automatic sedan.",
    "hourlyRate": 700
   },
   {
@@ -376,7 +376,7 @@
     "Roof rails"
    ],
    "origin": "Pakistan",
-   "marketNote": "7-seater family SUV. Market 8000-15000/day.",
+   "marketNote": "Seven-seat automatic SUV.",
    "hourlyRate": 1000
   },
   {
@@ -407,7 +407,7 @@
     "7 airbags"
    ],
    "origin": "Pakistan",
-   "marketNote": "Full-size SUV. Market 18000-25000/day.",
+   "marketNote": "Four-wheel-drive diesel SUV.",
    "hourlyRate": 2200
   },
   {
@@ -437,7 +437,7 @@
     "Wireless charging"
    ],
    "origin": "Pakistan",
-   "marketNote": "New Sportage L HEV. Market 12000-20000/day.",
+   "marketNote": "Hybrid all-wheel-drive SUV.",
    "hourlyRate": 1800
   }
  ]

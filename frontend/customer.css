@@ -1,12 +1,12 @@
-@font-face{font-family:'DM Sans';font-style:normal;font-weight:400;font-display:swap;src:url(assets/font-6.woff2) format('truetype')}
-@font-face{font-family:'DM Sans';font-style:normal;font-weight:500;font-display:swap;src:url(assets/font-2.woff2) format('truetype')}
-@font-face{font-family:'DM Sans';font-style:normal;font-weight:600;font-display:swap;src:url(assets/font-0.woff2) format('truetype')}
-@font-face{font-family:'DM Sans';font-style:normal;font-weight:700;font-display:swap;src:url(assets/font-1.woff2) format('truetype')}
-@font-face{font-family:'Manrope';font-style:normal;font-weight:400;font-display:swap;src:url(assets/font-3.woff2) format('truetype')}
-@font-face{font-family:'Manrope';font-style:normal;font-weight:500;font-display:swap;src:url(assets/font-4.woff2) format('truetype')}
-@font-face{font-family:'Manrope';font-style:normal;font-weight:600;font-display:swap;src:url(assets/font-5.woff2) format('truetype')}
-@font-face{font-family:'Manrope';font-style:normal;font-weight:700;font-display:swap;src:url(assets/font-8.woff2) format('truetype')}
-@font-face{font-family:'Manrope';font-style:normal;font-weight:800;font-display:swap;src:url(assets/font-7.woff2) format('truetype')}
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:400;font-display:swap;src:url(assets/font-6.woff2) format('woff2')}
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:500;font-display:swap;src:url(assets/font-2.woff2) format('woff2')}
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:600;font-display:swap;src:url(assets/font-0.woff2) format('woff2')}
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:700;font-display:swap;src:url(assets/font-1.woff2) format('woff2')}
+@font-face{font-family:'Manrope';font-style:normal;font-weight:400;font-display:swap;src:url(assets/font-3.woff2) format('woff2')}
+@font-face{font-family:'Manrope';font-style:normal;font-weight:500;font-display:swap;src:url(assets/font-4.woff2) format('woff2')}
+@font-face{font-family:'Manrope';font-style:normal;font-weight:600;font-display:swap;src:url(assets/font-5.woff2) format('woff2')}
+@font-face{font-family:'Manrope';font-style:normal;font-weight:700;font-display:swap;src:url(assets/font-8.woff2) format('woff2')}
+@font-face{font-family:'Manrope';font-style:normal;font-weight:800;font-display:swap;src:url(assets/font-7.woff2) format('woff2')}
 *{box-sizing:border-box}
 :root{
   --bg:#fbfaf6;
@@ -402,3 +402,92 @@ img{max-width:100%}
 .table-scroll{overflow-x:auto;max-width:100%}
 @media(max-width:760px){.car-price{flex-direction:column}.car-price .btn{width:100%}.admin-stats{grid-template-columns:1fr 1fr}}
 @media(max-width:480px){.admin-stats{grid-template-columns:1fr}}
+
+/* Refined catalogue: equal-height cards and uncropped vehicle photography. */
+.cars{grid-auto-rows:1fr;align-items:stretch;gap:20px}
+.cars .car{display:flex;flex-direction:column;min-width:0}
+.car-photo{display:block;flex:none;height:auto!important;aspect-ratio:16/10;background:#f4f4f0}
+.car-photo img{position:absolute;inset:14px;width:calc(100% - 28px);height:calc(100% - 28px);object-fit:contain;object-position:center;filter:none;transform:none!important;transition:none;will-change:auto;background:transparent}
+.car:hover .car-photo img{filter:none;transform:none}
+.car-photo::after,.photo-arrow{display:none}
+.car-body{flex:1;display:flex;flex-direction:column;gap:10px;min-height:99px;padding:16px 20px 19px;transition:none}
+.car:hover .car-body{transform:none}
+.car h3{font-size:16px;line-height:1.35;min-height:2.7em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.car-rent{margin-top:auto;display:flex;align-items:baseline;gap:5px}
+.car-rent strong{font-size:16px;letter-spacing:-.2px}
+.car-rent span{font-size:11px;color:var(--muted)}
+.car-status.pill{top:12px;left:12px;background:#ebf3e6;color:#284f32;border:1px solid #d4e4cd;box-shadow:none;backdrop-filter:none;font-size:10px}
+.car-status.pill.is-rented{background:#fff1eb;color:#914a2e;border-color:#efd4c7}
+.car:hover .car-status{transform:none}
+.trust{justify-content:space-around;flex-wrap:wrap;height:auto;min-height:52px;padding:12px 20px;gap:16px;background:transparent;font-size:11px}
+.trust::before,.trust::after{display:none}
+.trust>span{white-space:nowrap}
+.admin-access{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-2);border-radius:100px;padding:7px 12px;color:var(--text)!important;font-weight:600}
+.admin-access:hover{background:var(--lime-soft)}
+.notif-menu-head{display:flex;justify-content:space-between;align-items:center;padding:10px 8px 13px;border-bottom:1px solid var(--line);font-size:12px}
+.notif-menu-head .muted{font-weight:400;margin-left:4px}
+.notif-menu-list{max-height:360px;overflow-y:auto}
+.notif-item{width:100%;text-align:left;border-bottom:1px solid var(--line);background:transparent}
+.notif-item:last-child{border-bottom:0}
+.notif-item>span:last-child{min-width:0;flex:1}
+.notif-item .notif-message,.notif-item small{display:block;color:var(--muted);font-size:11px;line-height:1.5}
+.notif-item:not(.unread) .dot{visibility:hidden}
+.notif-empty{padding:18px;text-align:center;margin:0}
+.notification-target{outline:2px solid #7a9949;outline-offset:4px;border-radius:12px}
+/* A persistent support inbox replaces the separate Messages page. */
+.admin-top{position:relative;z-index:26}
+.admin-head-actions{display:flex;align-items:center;gap:10px;position:relative}
+.admin-head-actions .notif-dropdown{top:50px;right:0}
+.admin-heading{padding:23px 0 6px}
+.admin-heading h1{font-size:33px;margin:2px 0 10px}
+.admin-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,340px);gap:22px;align-items:start;padding-bottom:60px}
+.admin-content{min-width:0}
+.admin-inbox-shell{position:sticky;top:16px;z-index:19}
+.inbox-panel{height:min(78vh,710px);min-height:500px;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fff;box-shadow:var(--depth-1)}
+.inbox-head{display:flex;justify-content:space-between;align-items:center;padding:17px 18px 14px;border-bottom:1px solid var(--line)}
+.inbox-head small{font-size:9px;color:var(--muted);letter-spacing:1.4px;font-weight:700}
+.inbox-head h2{font-size:18px;margin:3px 0 0;letter-spacing:-.5px}
+.inbox-count{flex:none;display:inline-flex;align-items:center;justify-content:center;border-radius:100px;background:#a73831;color:white;font-size:10px;font-weight:700;min-width:21px;padding:3px 7px}
+.inbox-threads{max-height:162px;overflow:auto;border-bottom:1px solid var(--line);flex:none}
+.inbox-thread{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:12px 15px;text-align:left;border-bottom:1px solid var(--line);background:#fff}
+.inbox-thread:last-child{border-bottom:0}
+.inbox-thread:hover,.inbox-thread.selected{background:var(--bg-2)}
+.inbox-thread span:first-child{min-width:0}
+.inbox-thread b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inbox-thread small{display:block;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;margin-top:3px}
+.inbox-current{display:flex;align-items:center;justify-content:space-between;padding:12px 15px;border-bottom:1px solid var(--line);font-size:12px}
+.inbox-current small{color:var(--muted)}
+.inbox-messages{flex:1;min-height:155px;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#faf9f6}
+.inbox-compose{flex:none}
+.inbox-compose input{min-width:0}
+.owner-wallet{margin-bottom:20px}
+.owner-wallet small{color:var(--muted);font-size:11px}
+.owner-wallet h2{margin:5px 0 0;font-size:22px}
+/* Keep secondary pages and operations still and focused. */
+html{scroll-behavior:auto}
+body:not(.page-home) .fade,body:not(.page-home) .cars .car{animation:none!important;opacity:1!important;transform:none!important}
+body:not(.page-home) .depth-layer{transition:none;will-change:auto}
+body:not(.page-home) .depth-layer:hover,body:not(.page-home) .car:hover{transform:none;box-shadow:var(--depth-1)}
+body:not(.page-home) .btn,body:not(.page-home) .benefit,body:not(.page-home) .gallery-main img{transition:background-color .18s,border-color .18s,color .18s;will-change:auto}
+body:not(.page-home) .btn:hover,body:not(.page-home) .benefit:hover,body:not(.page-home) .gallery-main:hover img{transform:none;box-shadow:var(--depth-1)}
+body:not(.page-home) .bar,body:not(.page-home) .nav a::after{transition:none}
+@media(max-width:1250px){.admin-workspace .admin-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-workspace .chart-grid{grid-template-columns:1fr}}
+@media(max-width:850px){.admin-workspace{display:block;padding-bottom:55vh}.admin-inbox-shell{position:fixed;top:auto;right:12px;bottom:12px;width:min(340px,calc(100vw - 24px));z-index:30}.inbox-panel{height:min(50vh,455px);min-height:285px;box-shadow:var(--depth-3)}.admin-tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:12px}.admin-tabs .chip{flex:none}}
+@media(max-width:600px){.admin-top{flex-wrap:wrap;gap:8px}.admin-head-actions{width:100%;justify-content:flex-end}.admin-head-actions .btn{padding:9px 12px;font-size:10px}.admin-heading h1{font-size:28px}.admin-workspace .admin-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-access span{display:none}.trust{font-size:10px;justify-content:flex-start}.notif-dropdown{right:0}.car h3{font-size:15px}.car-body{min-height:94px}}
+.inbox-panel:not(:has(.inbox-thread)){height:auto;min-height:220px}
+@media(max-width:850px){.inbox-panel:not(:has(.inbox-thread)){min-height:150px}}
+body:not(.page-home) .notif-dropdown,body:not(.page-home) .chat-panel{transition:none;transform:none}
+body:not(.page-home) .chat-fab,body:not(.page-home) .chip,body:not(.page-home) .thumb,body:not(.page-home) .basket,body:not(.page-home) .notif-btn,body:not(.page-home) .apex-mark{transition:none;will-change:auto}
+body:not(.page-home) .chat-fab:hover,body:not(.page-home) .chip:hover,body:not(.page-home) .thumb:hover,body:not(.page-home) .apex-mark:hover{transform:none}
+.inbox-toggle{display:flex;align-items:center;gap:12px;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;pointer-events:none}
+.inbox-toggle-icon{display:none}
+@media(max-width:850px){
+  .admin-workspace{padding-bottom:110px}
+  .inbox-toggle{flex:1;justify-content:space-between;cursor:pointer;pointer-events:auto}
+  .inbox-toggle-icon{display:inline-block;font-size:25px;line-height:1;color:var(--ink)}
+  .admin-inbox-shell:not(.expanded) .inbox-panel{height:auto;min-height:0}
+  .admin-inbox-shell:not(.expanded) .inbox-panel>:not(.inbox-head){display:none}
+  .admin-inbox-shell:not(.expanded) .inbox-head{border-bottom:0}
+}
+.application-photos{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.application-photos img{display:block;width:100%;height:170px;object-fit:contain;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
