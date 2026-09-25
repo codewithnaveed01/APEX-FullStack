@@ -68,7 +68,7 @@ let adminSession=read('adminSession',null);
 let __apexRole=null; // populated only after a successful authenticated /api/auth/me
 let __apexRentedIds=null; // public, server-checked availability for the selected dates
 let __apexLiveVersion=0; // prevents an in-flight poll from undoing a read or reply
-let __apexPollBusy=false,__apexAvailabilityBusy=false;
+let __apexPollBusy=false,__apexAvailabilityBusy=false,__apexCheckoutChecking=false;
 // The admin's cached browser state is never trusted as the server state on load.
 // Wait for an authenticated bootstrap before allowing edits or sync pushes.
 let __apexServerReady=false;
@@ -454,17 +454,57 @@ function gallery(c){return [{key:c.image,label:''},{key:c.image+'-interior',labe
 function detail(id){const c=carBy(id);if(!c)return empty('Vehicle not found','Return to collection','Explore collection','fleet');currentCar=c.id;const pics=gallery(c),p=pics[galleryIndex];return `<div class="wrap"><div class="page-top"><a class="back" href="#fleet">← Back to collection</a><div style="display:flex;justify-content:space-between;gap:15px;align-items:center;margin-top:20px"><div><div class="eyebrow">${c.brand.toUpperCase()} / ${c.category.toUpperCase()}</div><h1>${esc(c.name)}</h1><p>${c.year} · ${esc(c.color)} · ${c.condition}</p></div><span class="pill">${c.condition}</span></div></div><div class="detail-layout"><div><div class="gallery-main depth-layer"><img id="main-photo" src="${getCarPhoto(c,p.key)}" alt="${esc(c.name)}" onclick="lightbox(${c.id},galleryIndex)"><span class="gallery-label" id="gallery-label">${galleryIndex+1} / ${pics.length}</span><div class="gallery-controls"><button onclick="switchGallery(-1)">‹</button><button onclick="switchGallery(1)">›</button></div></div><div class="thumbs">${pics.map((p,i)=>`<button class="thumb ${galleryIndex===i?'on':''}" onclick="setGallery(${i})"><img src="${photo(p.key)}" alt=""></button>`).join('')}</div><div class="info-grid">${[['Model year',c.year],['Engine',c.engine],['Power',c.power],['Transmission','Automatic'],['Seats',c.seats+' passengers'],['Odometer',c.km]].map(([k,v])=>`<div class="info-box"><small>${k}</small><b>${esc(v)}</b></div>`).join('')}</div><div class="detail-section"><h3>${esc(c.name)}</h3><div class="checklist">${c.features.map(f=>`<span>${esc(f)}</span>`).join('')}</div></div></div><aside class="panel reservation depth-layer"><div class="eyebrow">RESERVE</div><h2>${money(c.rate)} <small>/ day</small></h2><form id="reservation-form" onsubmit="addToCart(event,${c.id})"><div class="formgrid dates"><div class="field"><label>Pick-up date</label><input type="date" name="start" min="${TODAY}" required value="${trip.start}" onchange="refreshQuote(${c.id})"></div><div class="field"><label>Return date</label><input type="date" name="end" min="${TODAY}" required value="${trip.end}" onchange="refreshQuote(${c.id})"></div><div class="field wide"><label>Branch</label><select name="city">${cities(trip.city)}</select></div><div class="field wide"><label>Service</label><select name="service" onchange="refreshQuote(${c.id})"><option ${trip.service==='Self-drive'?'selected':''}>Self-drive</option><option ${trip.service==='With driver'?'selected':''}>With driver</option></select></div></div><div id="quote-breakdown"></div><button class="btn full" id="add-car" style="margin-top:20px">Add to your journey ↗</button></form></aside></div><div style="height:65px"></div></div>`}
 function priceLines(q){return `<div class="line"><span>Vehicle rental${q.n?' · '+q.n+' days':''}</span><strong>${money(q.base)}</strong></div>${q.saving?`<div class="line"><span>Long-stay savings</span><strong>− ${money(q.saving)}</strong></div>`:''}${q.driver?`<div class="line"><span>Chauffeur service</span><strong>${money(q.driver)}</strong></div>`:''}<div class="line"><span>Refundable deposit</span><strong>${money(q.deposit)}</strong></div><div class="line total"><span>Total due</span><strong>${money(q.total)}</strong></div>`}
 function refreshQuote(id){const form=document.getElementById('reservation-form');if(!form)return;const f=Object.fromEntries(new FormData(form)),c=carBy(id),valid=validTrip(f),ok=valid&&available(c,f);document.getElementById('quote-breakdown').innerHTML=valid?`<div class="notice">${f.service==='With driver'?`${money(config.driverRate)}/day · ${c.seats-1} passenger seats with driver.`:'200 km/day included'}${!ok?'<br><b>Unavailable for these dates.</b>':''}</div>${priceLines(quote({...f,carId:id}))}`:'<div class="notice">Please select valid dates.</div>';document.getElementById('add-car').disabled=!ok}
-function addToCart(e,id){e.preventDefault();let f=Object.fromEntries(new FormData(e.target));if(!validTrip(f)||!available(carBy(id),f))return toast('Please choose available dates.');if(cart.some(i=>i.carId===id))return toast('Already in your selection.');cart.push({...f,carId:id,driverRate:config.driverRate});trip=f;persist();toast('Added to your journey.');modal('Your journey is taking shape.',`<div class="cart-item"><img src="${photo(carBy(id).image)}" alt=""><div><h3>${esc(carBy(id).name)}</h3><p>${date(f.start)} — ${date(f.end)}</p><p>${esc(f.service)} · ${esc(f.city)}</p></div></div><p class="muted small" style="margin-top:20px">${cart.length} cars selected.</p><div class="button-row"><button class="btn ghost" onclick="closeModal();go('fleet')">Explore more</button><button class="btn" onclick="closeModal();go('cart')">View journey ↗</button></div>`);document.querySelector('.basket span').textContent=cart.length}
+function addToCart(e,id){
+  e.preventDefault();
+  const f=Object.fromEntries(new FormData(e.target)),c=carBy(id);
+  const range=apexTripWindow(f);
+  const confirmed=e.target.dataset.availabilityWindow===range.start+'|'+range.end&&
+    e.target.dataset.availabilityResult==='available';
+  if(!c||!validTrip(f)||c.status!=='Active'||(v3Online()?!confirmed:!available(c,f)))
+    return toast('Please choose available dates.');
+  if(cart.some(i=>i.carId===id))return toast('Already in your selection.');
+  cart.push({...f,carId:id,driverRate:config.driverRate});trip=f;persist();
+  toast('Added to your journey.');
+  modal('Your journey is taking shape.',`<div class="cart-item"><img src="${photo(c.image)}" alt=""><div><h3>${esc(c.name)}</h3><p>${date(f.start)} — ${date(f.end)}</p><p>${esc(f.service)} · ${esc(f.city)}</p></div></div><p class="muted small" style="margin-top:20px">${cart.length} cars selected.</p><div class="button-row"><button class="btn ghost" onclick="closeModal();go('fleet')">Explore more</button><button class="btn" onclick="closeModal();go('cart')">View journey ↗</button></div>`);
+  document.querySelector('.basket span').textContent=cart.length;
+}
 function setGallery(i){galleryIndex=i;const c=carBy(currentCar),p=gallery(c)[i];document.getElementById('main-photo').src=getCarPhoto(carBy(currentCar),p.key);document.getElementById('gallery-label').textContent=(i+1)+' / 3';document.querySelectorAll('.thumb').forEach((t,j)=>t.classList.toggle('on',i===j))}
 function switchGallery(d){setGallery((galleryIndex+d+3)%3)}
 function lightbox(id,index){const c=carBy(id),p=gallery(c)[index];modal(esc(c.name),`<img class="lightbox-image" src="${getCarPhoto(c,p.key)}" alt=""><div class="lightbox-footer"><button onclick="lightbox(${id},${(index+2)%3})">← Previous</button><span>${index+1} / 3</span><button onclick="lightbox(${id},${(index+1)%3})">Next →</button></div>`,true)}
 function plansPage(){return `<div class="wrap"><div class="page-top"><div class="eyebrow">RENTAL OPTIONS</div><h1>Choose a rental plan.</h1><p>Longer rentals receive an automatic discount.</p></div><div class="plans">${[['Daily rental','Daily','From PKR 4,500','1–6 days','No long-stay discount','24-hour periods',2],['Weekly rental','Weekly','From PKR 28,350','7 days','10% off vehicle rental','7-day term',7],['Monthly rental','Monthly','From PKR 108,000','30 days','20% off vehicle rental','30-day term',30]].map((p,i)=>`<div class="panel plan ${i===1?'featured':''} depth-layer"><span class="pill">${p[1]}</span><h3>${p[0]}</h3><div class="plan-price">${p[2]}<br><small>${p[3]}</small></div><ul><li>${p[4]}</li><li>${p[5]}</li><li>200 km/day</li><li>Optional chauffeur</li></ul><button class="btn ${i===1?'':'ghost'} full" onclick="choosePlan(${p[6]})">Explore ${p[1].toLowerCase()} ↗</button></div>`).join('')}</div></div>`}
 function choosePlan(n){const end=new Date(trip.start+'T12:00:00');end.setDate(end.getDate()+n);trip.end=end.toISOString().slice(0,10);__apexRentedIds=null;write('trip',trip);go('fleet');setTimeout(apexPollAvailability,0)}
 function empty(title,sub,button='Explore cars',dest='fleet'){return `<div class="wrap empty"><div class="eyebrow">YOUR APEX JOURNEY</div><h2>${title}</h2><p>${sub}</p><button class="btn" onclick="go('${dest}')">${button} ↗</button></div>`}
-function cartItem(i,index,removable=true){const c=carBy(i.carId),q=quote(i);return `<div class="cart-item"><img src="${getCarMainPhoto(c)}" alt=""><div><h3>${esc(c.name)}</h3><p>${date(i.start)} — ${date(i.end)} · ${q.n} days</p><p>${esc(i.city)} · ${esc(i.service)}</p>${!available(c,i)&&removable?'<p class="error-text">No longer available.</p>':''}</div><div><strong style="font-size:13px">${money(q.rental)}</strong>${removable?`<p style="margin-top:12px"><button class="remove" onclick="removeCart(${index})">Remove ×</button></p>`:''}</div></div>`}
+// A cached booking can lag an admin cancellation; the online cart is checked against the server at checkout.
+function cartItem(i,index,removable=true){const c=carBy(i.carId),q=quote(i);return `<div class="cart-item"><img src="${getCarMainPhoto(c)}" alt=""><div><h3>${esc(c.name)}</h3><p>${date(i.start)} — ${date(i.end)} · ${q.n} days</p><p>${esc(i.city)} · ${esc(i.service)}</p>${!v3Online()&&!available(c,i)&&removable?'<p class="error-text">No longer available.</p>':''}</div><div><strong style="font-size:13px">${money(q.rental)}</strong>${removable?`<p style="margin-top:12px"><button class="remove" onclick="removeCart(${index})">Remove ×</button></p>`:''}</div></div>`}
 function removeCart(i){cart.splice(i,1);write('cart',cart);render()}
-function cartPage(){if(!cart.length)return empty('Your selection is empty.','Selected vehicles will appear here.');return `<div class="wrap"><div class="page-top"><a href="#fleet" class="back">← Keep exploring</a><h1>Your selection.</h1><p>${cart.length} vehicles selected.</p></div><div class="checkout-layout"><div class="panel depth-layer">${cart.map((i,n)=>cartItem(i,n)).join('')}<button class="text-btn" style="margin-top:23px" onclick="go('fleet')">+ Add another car</button></div><aside class="panel reservation depth-layer"><h3 class="formtitle">Your rental summary</h3>${priceLines(totals())}<button class="btn full" onclick="beginCheckout()">Continue to booking ↗</button></aside></div><div style="height:65px"></div></div>`}
-function beginCheckout(){if(cart.some(i=>!validTrip(i)||!available(carBy(i.carId),i)))return toast('Some vehicles unavailable.');if(!account)return auth(true,'checkout');checkoutStep=1;go('checkout')}
+function cartPage(){if(!cart.length)return empty('Your selection is empty.','Selected vehicles will appear here.');return `<div class="wrap"><div class="page-top"><a href="#fleet" class="back">← Keep exploring</a><h1>Your selection.</h1><p>${cart.length} vehicles selected.</p></div><div class="checkout-layout"><div class="panel depth-layer">${cart.map((i,n)=>cartItem(i,n)).join('')}<button class="text-btn" style="margin-top:23px" onclick="go('fleet')">+ Add another car</button></div><aside class="panel reservation depth-layer"><h3 class="formtitle">Your rental summary</h3>${priceLines(totals())}<button class="btn full" id="cart-checkout" onclick="beginCheckout()">Continue to booking ↗</button></aside></div><div style="height:65px"></div></div>`}
+async function beginCheckout(){
+  if(__apexCheckoutChecking)return;
+  if(cart.some(i=>!validTrip(i)||!carBy(i.carId)||carBy(i.carId).status!=='Active'))
+    return toast('Some vehicles unavailable.');
+  if(v3Online()){
+    const items=cart.map(i=>({carId:i.carId,...apexTripWindow(i)}));
+    const button=document.getElementById('cart-checkout');
+    __apexCheckoutChecking=true;
+    if(button){button.disabled=true;button.textContent='Checking availability…'}
+    try{
+      const results=await Promise.all(items.map(async i=>{
+        const result=await v3Api('/api/availability?carId='+encodeURIComponent(i.carId)+
+          '&start='+encodeURIComponent(i.start)+'&end='+encodeURIComponent(i.end));
+        if(typeof result?.available!=='boolean')throw new Error('Invalid availability response');
+        return result.available;
+      }));
+      if(route!=='cart'||JSON.stringify(cart.map(i=>({carId:i.carId,...apexTripWindow(i)})))!==JSON.stringify(items))return;
+      if(results.some(ok=>!ok))return toast('Some vehicles unavailable.');
+    }catch(e){toast('Could not check availability. Please try again.');return}
+    finally{
+      __apexCheckoutChecking=false;
+      if(button?.isConnected){button.disabled=false;button.textContent='Continue to booking ↗'}
+    }
+  }else if(cart.some(i=>!available(carBy(i.carId),i)))return toast('Some vehicles unavailable.');
+  if(!account)return auth(true,'checkout');
+  checkoutStep=1;go('checkout');
+}
 
 function auth(signup=true,next='home'){
   const isSignup=signup;
@@ -857,11 +897,12 @@ function refreshQuote(id){
   // request finishes first or this form is replaced during navigation.
   const requestId=String((Number(form.dataset.availabilityRequest)||0)+1);
   form.dataset.availabilityRequest=requestId;
+  form.dataset.availabilityWindow='';form.dataset.availabilityResult='';
   const f=Object.fromEntries(new FormData(form)),c=carBy(id);
   if(!c)return;
   const valid=validTrip(f),ok=valid&&available(c,f),online=v3Online();
   const el=document.getElementById('quote-breakdown');
-  el.innerHTML=valid?`<div class="notice">${f.service==='With driver'?money(config.driverRate)+'/day chauffeur':money(v3Hourly(c))+'/hour · '+money(c.rate)+'/day · 200 km/day included'}${!ok?'<br><b style="color:#9e3a2d">Unavailable for this date/time window.</b>':''}<span id="v3-server-avail"></span></div>${priceLines(quote({...f,carId:id}))}`:'<div class="notice">Please select valid pick-up and return date + time.</div>';
+  el.innerHTML=valid?`<div class="notice">${f.service==='With driver'?money(config.driverRate)+'/day chauffeur':money(v3Hourly(c))+'/hour · '+money(c.rate)+'/day · 200 km/day included'}${!ok&&!online?'<br><b style="color:#9e3a2d">Unavailable for this date/time window.</b>':''}<span id="v3-server-avail"></span></div>${priceLines(quote({...f,carId:id}))}`:'<div class="notice">Please select valid pick-up and return date + time.</div>';
   const btn=form.querySelector('#add-car');
   if(btn)btn.disabled=!ok||online; // wait for the server before offering the vehicle
   if(!valid||!online)return;
@@ -880,10 +921,12 @@ function refreshQuote(id){
       if(!current())return;
       if(typeof d?.available!=='boolean')throw new Error('Invalid availability response');
       const latest=Object.fromEntries(new FormData(form));
+      form.dataset.availabilityWindow=sDt+'|'+eDt;
+      form.dataset.availabilityResult=d.available?'available':'unavailable';
       const target=form.querySelector('#v3-server-avail');
       if(target)target.innerHTML=d.available?'<br><b style="color:#2f7d32">✔ Server confirms availability</b>':'<br><b style="color:#9e3a2d">✖ Server: already booked in this window</b>';
       const button=form.querySelector('#add-car');
-      if(button)button.disabled=!(d.available&&validTrip(latest)&&available(c,latest));
+      if(button)button.disabled=!(d.available&&validTrip(latest)&&c.status==='Active');
     }).catch(()=>{
       if(!current())return;
       const target=form.querySelector('#v3-server-avail');
@@ -899,7 +942,7 @@ function card(c){
   return `<article class="car" data-car-id="${Number(c.id)}"><a class="car-photo" href="#car/${c.id}" aria-label="View ${esc(c.name)}"><img src="${getCarMainPhoto(c)}" alt="${esc(c.name)}" loading="lazy"><span class="pill car-status ${rented?'is-rented':''}">${esc(status)}</span></a><div class="car-body"><h3><a href="#car/${c.id}">${esc(c.name)}</a></h3><div class="car-rent"><strong>${money(c.rate)}</strong><span>/ day</span></div></div></article>`;
 }
 function home(){
-  return `<div class="wrap"><section class="hero depth-layer v3-hero"><img src="${photo('hero')}" alt="A premium car ready for the road"><div class="hero-copy"><h1>Driven<br><em>beyond ordinary.</em></h1><button class="btn" onclick="go('fleet')">Explore the collection ↗</button></div></section>${searchForm()}<div class="trust"><span>Hourly & daily rentals</span><span>Self-drive or chauffeur</span><span>Transparent pricing</span></div><section class="section"><div class="section-head"><div><div class="eyebrow">THE COLLECTION</div><h2>Find your next drive.</h2></div><button class="text-btn" onclick="go('fleet')">View all vehicles ↗</button></div><div class="cars">${fleet.filter(c=>c.status==='Active').map(card).join('')}</div></section><div class="benefits"><div class="benefit"><div class="symbol">✧</div><div><h3>Flexible rentals</h3><p>Book by the hour or day.</p></div></div><div class="benefit"><div class="symbol">⌘</div><div><h3>Drive or be driven</h3><p>Choose self-drive or a chauffeur.</p></div></div><div class="benefit"><div class="symbol">↗</div><div><h3>One reservation</h3><p>Add more than one vehicle to your journey.</p></div></div></div><div class="owner-banner depth-layer"><div><div class="eyebrow">PARTNER WITH APEX</div><h2>Put your car to work.</h2><p>List your vehicle with us.</p></div><button class="btn ghost" onclick="go('owner')">List your car ↗</button></div></div>`;
+  return `<div class="wrap"><section class="hero depth-layer v3-hero"><img src="${photo('hero')}" alt="A premium car ready for the road"><div class="hero-copy"><h1>Driven<br><em>beyond ordinary.</em></h1><button class="btn" onclick="go('fleet')">Explore the collection ↗</button></div></section>${searchForm()}<section class="section"><div class="section-head"><div><div class="eyebrow">THE COLLECTION</div><h2>Find your next drive.</h2></div><button class="text-btn" onclick="go('fleet')">View all vehicles ↗</button></div><div class="cars">${fleet.filter(c=>c.status==='Active').map(card).join('')}</div></section><div class="benefits"><div class="benefit"><div class="symbol">✧</div><div><h3>Flexible rentals</h3><p>Book by the hour or day.</p></div></div><div class="benefit"><div class="symbol">⌘</div><div><h3>Drive or be driven</h3><p>Choose self-drive or a chauffeur.</p></div></div><div class="benefit"><div class="symbol">↗</div><div><h3>One reservation</h3><p>Add more than one vehicle to your journey.</p></div></div></div><div class="owner-banner depth-layer"><div><div class="eyebrow">PARTNER WITH APEX</div><h2>Put your car to work.</h2><p>List your vehicle with us.</p></div><button class="btn ghost" onclick="go('owner')">List your car ↗</button></div></div>`;
 }
 
 function renterForm(){return `<h2 class="formtitle">Renter details</h2><form id="renter-form" onsubmit="reviewCheckout(event)"><div class="formgrid"><div class="field"><label>Full legal name</label><input name="name" required value="${esc(checkoutInfo.name||account.name)}" minlength="2"></div><div class="field"><label>Phone number</label><input name="phone" type="tel" required value="${esc(checkoutInfo.phone||account.phone)}"></div><div class="field"><label>Email address</label><input type="email" required name="email" value="${esc(account.email)}"></div><div class="field"><label>Date of birth (18+)</label><input type="date" name="dob" required max="${v3AgeCutoff(18)}" value="${esc(checkoutInfo.dob||'')}"></div><div class="field"><label>Identity document</label><select name="idType" onchange="updateID(this.value)"><option>CNIC</option><option>Passport</option></select></div><div class="field"><label id="identity-label">CNIC number · 13 digits</label><input id="identity-number" name="identity" required pattern="[0-9]{13}" placeholder="0000000000000"></div><div class="field"><label>CNIC front picture *</label><input type="file" accept="image/*" required onchange="v3CaptureDoc(this,'cnic_front','__v3Docs')"><div id="v3-pv-cnic_front" class="v3-upload-preview"></div></div><div class="field"><label>CNIC back picture *</label><input type="file" accept="image/*" required onchange="v3CaptureDoc(this,'cnic_back','__v3Docs')"><div id="v3-pv-cnic_back" class="v3-upload-preview"></div></div><div class="field wide"><label>Current address</label><input name="address" required minlength="8" value="${esc(checkoutInfo.address||'')}"></div><div class="field"><label>Emergency contact name</label><input name="emergencyName" required minlength="2" value="${esc(checkoutInfo.emergencyName||'')}"></div><div class="field"><label>Emergency contact phone</label><input name="emergencyPhone" type="tel" required value="${esc(checkoutInfo.emergencyPhone||'')}"></div><div class="field wide"><label>Trip purpose / Destination</label><input name="destination" required value="${esc(checkoutInfo.destination||'')}"></div><div class="field wide"><label>Pick-up mode</label><select name="pickupMode" onchange="toggleHomeDelivery(this.value)"><option value="Office pickup">Office pickup — ${esc(config.officeAddress)}</option><option value="Home delivery">Home delivery — +${money(config.homeDeliveryCharge)} car at your home</option></select></div><div class="field wide" id="home-delivery-field" style="display:none"><label>Home delivery full address</label><input name="homeAddress" placeholder="House #, Street, Area, City" value="${esc(checkoutInfo.homeAddress||'')}"></div></div>${cart.map((i,n)=>i.service==='Self-drive'?`<div class="detail-section" style="margin-top:25px"><h3 style="font-size:17px">Driver ${n+1} · ${esc(carBy(i.carId).name)}</h3><div class="formgrid"><div class="field"><label>Driver full name</label><input name="driverName_${n}" required></div><div class="field"><label>Driver DOB · 25+</label><input name="driverDOB_${n}" type="date" required max="${v3AgeCutoff(25)}"></div><div class="field"><label>Licence number</label><input name="license_${n}" required></div><div class="field"><label>Licence expiry</label><input name="expiry_${n}" type="date" required min="${i.end}"></div></div></div>`:'').join('')}<label class="check"><input type="checkbox" required name="terms"><span>I accept rental & cancellation terms.</span></label><div class="button-row"><button class="btn" type="submit">Review & pay ↗</button></div></form>`}
@@ -1257,8 +1300,9 @@ async function apexPollLive(){
   }catch(e){/* Offline? Keep the current view and try again at the next interval. */}
   finally{__apexPollBusy=false;}
 }
-function apexTripWindow(){
-  return {start:trip.start+'T'+(trip.startTime||'09:00'),end:trip.end+'T'+(trip.endTime||'09:00')};
+function apexTripWindow(t=trip){
+  return {start:t.startDt||(t.start+'T'+(t.startTime||'09:00')),
+    end:t.endDt||(t.end+'T'+(t.endTime||'09:00'))};
 }
 async function apexPollAvailability(){
   if(__apexAvailabilityBusy||!v3Online()||isAdmin||document.hidden||
