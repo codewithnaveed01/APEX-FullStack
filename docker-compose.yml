@@ -1,7 +1,7 @@
 # Local full stack: app (Java 17 + PostgreSQL wire client) + database.
 #   docker compose up
 # App:  http://localhost:3030
-# DB:    localhost:5432 (user/pass/db = apex)
+# DB:    db:5432 inside Compose (user/pass/db = apex; not published on host)
 services:
   db:
     image: postgres:16-alpine
