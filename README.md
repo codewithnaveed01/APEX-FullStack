@@ -71,9 +71,11 @@ docker compose up --build
 ```bash
 # With the app running at localhost:3030 (e.g. via Docker Compose):
 python3 backend/test/e2e_test.py
-# Optional, with Node installed: test frontend refresh/sync and date defaults (no server needed)
+# Optional, with Node installed: frontend checks (no server needed)
 node backend/test/frontend_sync_test.js
 node backend/test/frontend_date_test.js
+node backend/test/frontend_live_test.js
+node backend/test/frontend_availability_test.js
 
 # With a LOCAL PostgreSQL URL accessible from the host and JDK 17 installed:
 bash backend/build.sh

@@ -131,6 +131,8 @@ d1 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 3))
 d2 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 4))
 s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}&end={d2}")
 check("availability free", s == 200 and b.get("available") is True, f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}T09:00&end={d2}T09:00")
+check("exact hourly availability free", s == 200 and b.get("available") is True, f"{s} {b}")
 
 def mk_order(car_ids, start, end, token, service="Self-drive", cnic="3520212345678", payment="JazzCash", extra=None):
     body = {
@@ -159,7 +161,16 @@ totals = order1.get("totals", {})
 check("totals consistent", totals.get("rental", -1) + totals.get("deposit", 0) == totals.get("total", -2), f"{totals}")
 
 s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}&end={d2}")
-check("availability now clash", s == 200 and b.get("available") is False and b.get("clashWith"), f"{s} {b}")
+check("availability now clash", s == 200 and b.get("available") is False and b.get("clashWith") == "Reserved", f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}T09:00&end={d2}T09:00")
+check("hourly availability detects booked window without exposing customer", s == 200 and b.get("available") is False and b.get("clashWith") == "Reserved" and (not oid or oid not in str(b)) and "Test Customer" not in str(b), f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}T07:00&end={d1}T09:00")
+check("hourly availability allows window ending at pickup", s == 200 and b.get("available") is True, f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d2}T09:00&end={d2}T10:00")
+check("hourly availability allows window starting at return", s == 200 and b.get("available") is True, f"{s} {b}")
+for invalid_start, invalid_end in [(d2+"T10:00", d2+"T09:00"), (d1, d2+"T09:00"), ("2026-02-30T09:00", d2+"T09:00"), ("2026-02-30", d2)]:
+    s, b = req("GET", f"/api/availability?carId={car_id}&start={invalid_start}&end={invalid_end}")
+    check("invalid availability window rejected", s == 422, f"{s} {b}")
 s, summary = req("GET", f"/api/availability/fleet?start={d1}T09:00&end={d2}T09:00")
 check("public fleet availability flags rented car", s == 200 and car_id in summary.get("rentedIds", []), f"{s} {summary}")
 check("public availability exposes no booking details", s == 200 and set(summary) == {"rentedIds"}, f"{summary}")
@@ -168,7 +179,7 @@ check("invalid fleet window rejected", s == 422, f"{s} {b}")
 
 # overlapping window must clash (back-to-back is allowed, overlap is not)
 s, b = mk_order([car_id], d1, time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 6)), cust)
-check("partial overlap rejected 409", s == 409 and "clash" in str(b.get("error", "")).lower(), f"{s} {b}")
+check("partial overlap rejected 409 without booking identity", s == 409 and "clash" in str(b.get("error", "")).lower() and "Test Customer" not in str(b) and (not oid or oid not in str(b)), f"{s} {b}")
 
 # concurrency: 4 parallel bookings, same car & window (using a different car)
 conc_car = fleet[1]["id"]

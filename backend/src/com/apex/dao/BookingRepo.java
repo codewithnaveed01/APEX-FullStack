@@ -136,7 +136,7 @@ public final class BookingRepo {
      */
     public String findOverlap(PgConnection c, long carId, String startDt, String endDt, String excludeBookingId) {
         QueryResult r = c.query(
-                "SELECT b.id, b.customer_name FROM booking_items i" +
+                "SELECT b.id FROM booking_items i" +
                 " JOIN bookings b ON b.id = i.booking_id" +
                 " WHERE i.car_id = $1" +
                 " AND b.id <> $2" +
@@ -147,8 +147,7 @@ public final class BookingRepo {
                 new String[]{String.valueOf(carId), excludeBookingId == null ? "" : excludeBookingId,
                         startDt, endDt});
         if (r.rowCount() == 0) return null;
-        String[] row = r.rows.get(0);
-        return row[0] + " (" + (row[1] == null ? "customer" : row[1]) + ")";
+        return r.rows.get(0)[0];
     }
 
     /** All active windows for one car - used for sync overlap validation. */

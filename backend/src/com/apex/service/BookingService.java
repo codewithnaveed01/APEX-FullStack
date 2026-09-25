@@ -49,13 +49,31 @@ public final class BookingService {
 
     public JsonObject availability(String carIdStr, String start, String end) {
         long carId = Validation.longValue(carIdStr, "carId");
-        String s = Validation.date(start, "start");
-        String e = Validation.date(end, "end");
-        if (e.compareTo(s) < 0) throw ApiException.validation("End date must be after start date");
-        String startDt = s + "T00:00";
-        String endDt = e + "T23:59";
-        PricingService.hoursBetween(startDt, endDt); // validates parse
-
+        String s = Json.clean(start);
+        String e = Json.clean(end);
+        String startDt, endDt;
+        if (s.matches("\\d{4}-\\d{2}-\\d{2}") && e.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            // Preserve date-only callers: their window covers both whole days.
+            Validation.date(s, "start");
+            Validation.date(e, "end");
+            if (e.compareTo(s) < 0) throw ApiException.validation("End date must be after start date");
+            startDt = s + "T00:00";
+            endDt = e + "T23:59";
+        } else {
+            // The reservation form and fleet badges use exact hourly windows.
+            if (!s.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}") ||
+                    !e.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}")) {
+                throw ApiException.validation("Provide a valid start and end date/time");
+            }
+            Validation.date(s.substring(0, 10), "start");
+            Validation.date(e.substring(0, 10), "end");
+            startDt = PricingService.fmt(PricingService.parse(s));
+            endDt = PricingService.fmt(PricingService.parse(e));
+            if (!s.equals(startDt) || !e.equals(endDt)) {
+                throw ApiException.validation("Provide a valid start and end date/time");
+            }
+        }
+        PricingService.hoursBetween(startDt, endDt);
         return db.with(c -> {
             Car car = cars.get(c, carId);
             if (car == null) throw ApiException.notFound("Car not found");
@@ -65,7 +83,7 @@ public final class BookingService {
             o.addProperty("start", s);
             o.addProperty("end", e);
             o.addProperty("available", clash == null);
-            o.addProperty("clashWith", clash == null ? "" : clash);
+            o.addProperty("clashWith", clash == null ? "" : "Reserved");
             return o;
         });
     }
@@ -196,7 +214,7 @@ public final class BookingService {
                 String clash = bookings.findOverlap(c, carId, it.get("startDt").getAsString(),
                         it.get("endDt").getAsString(), "");
                 if (clash != null) {
-                    throw ApiException.conflict("Time clash: " + car.name + " is already booked with " + clash);
+                    throw ApiException.conflict("Time clash: " + car.name + " is already booked for this window");
                 }
                 Long itemDriverRate = it.has("driverRate") && Json.getLong(it, "driverRate", -1) > 0
                         ? Long.valueOf(Json.getLong(it, "driverRate", 0)) : null;

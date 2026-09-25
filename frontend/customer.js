@@ -853,20 +853,43 @@ function searchFleet(e){e.preventDefault();const f=Object.fromEntries(new FormDa
 
 function refreshQuote(id){
   const form=document.getElementById('reservation-form');if(!form)return;
+  // Each date/time change invalidates earlier requests, even when a later
+  // request finishes first or this form is replaced during navigation.
+  const requestId=String((Number(form.dataset.availabilityRequest)||0)+1);
+  form.dataset.availabilityRequest=requestId;
   const f=Object.fromEntries(new FormData(form)),c=carBy(id);
   if(!c)return;
-  const valid=validTrip(f),ok=valid&&available(c,f);
+  const valid=validTrip(f),ok=valid&&available(c,f),online=v3Online();
   const el=document.getElementById('quote-breakdown');
   el.innerHTML=valid?`<div class="notice">${f.service==='With driver'?money(config.driverRate)+'/day chauffeur':money(v3Hourly(c))+'/hour · '+money(c.rate)+'/day · 200 km/day included'}${!ok?'<br><b style="color:#9e3a2d">Unavailable for this date/time window.</b>':''}<span id="v3-server-avail"></span></div>${priceLines(quote({...f,carId:id}))}`:'<div class="notice">Please select valid pick-up and return date + time.</div>';
-  const btn=document.getElementById('add-car');if(btn)btn.disabled=!ok;
-  if(valid&&v3Online()){
-    const sDt=f.start+'T'+(f.startTime||'09:00'),eDt=f.end+'T'+(f.endTime||'09:00');
-    fetch('/api/availability?carId='+id+'&start='+encodeURIComponent(sDt)+'&end='+encodeURIComponent(eDt)).then(r=>r.ok?r.json():null).then(d=>{
-      const box=document.getElementById('v3-server-avail');if(!box||!d)return;
-      box.innerHTML=d.available?'<br><b style="color:#2f7d32">✔ Server confirms availability</b>':'<br><b style="color:#9e3a2d">✖ Server: already booked in this window</b>';
-      if(!d.available&&btn)btn.disabled=true;
-    }).catch(()=>{});
-  }
+  const btn=form.querySelector('#add-car');
+  if(btn)btn.disabled=!ok||online; // wait for the server before offering the vehicle
+  if(!valid||!online)return;
+  const sDt=f.start+'T'+(f.startTime||'09:00'),eDt=f.end+'T'+(f.endTime||'09:00');
+  const current=()=>{
+    if(document.getElementById('reservation-form')!==form||form.dataset.availabilityRequest!==requestId)return false;
+    const now=Object.fromEntries(new FormData(form));
+    return sDt===now.start+'T'+(now.startTime||'09:00')&&
+      eDt===now.end+'T'+(now.endTime||'09:00');
+  };
+  const box=form.querySelector('#v3-server-avail');
+  if(box)box.textContent=' Checking availability…';
+  fetch('/api/availability?carId='+id+'&start='+encodeURIComponent(sDt)+'&end='+encodeURIComponent(eDt))
+    .then(r=>{if(!r.ok)throw new Error('Availability check failed');return r.json()})
+    .then(d=>{
+      if(!current())return;
+      if(typeof d?.available!=='boolean')throw new Error('Invalid availability response');
+      const latest=Object.fromEntries(new FormData(form));
+      const target=form.querySelector('#v3-server-avail');
+      if(target)target.innerHTML=d.available?'<br><b style="color:#2f7d32">✔ Server confirms availability</b>':'<br><b style="color:#9e3a2d">✖ Server: already booked in this window</b>';
+      const button=form.querySelector('#add-car');
+      if(button)button.disabled=!(d.available&&validTrip(latest)&&available(c,latest));
+    }).catch(()=>{
+      if(!current())return;
+      const target=form.querySelector('#v3-server-avail');
+      if(target)target.textContent=' Availability check unavailable. Please try again.';
+      const button=form.querySelector('#add-car');if(button)button.disabled=true;
+    });
 }
 
 /* A quiet, uniform card: full vehicle image, live availability and daily rent. */
