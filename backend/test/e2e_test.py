@@ -512,6 +512,21 @@ check("logout 200", s == 200, f"{s}")
 s, b = req("GET", "/api/auth/me", token=cust2)
 check("token dead after logout", s == 401, f"{s}")
 
+print("== 18. Shared-IP polling does not exhaust the normal API quota ==")
+for endpoint, label, token in [
+    ("/api/live", "authenticated live feed", cust),
+    (f"/api/availability/fleet?start={d1}T09:00&end={d2}T09:00", "fleet availability", None),
+]:
+    failed_at = None
+    for n in range(305):  # above the 300/10min quota for ordinary requests
+        status, _ = req("GET", endpoint, token=token)
+        if status != 200:
+            failed_at = (n + 1, status)
+            break
+    check(label + " has its own bounded polling quota", failed_at is None, f"first failure: {failed_at}")
+status, _ = req("GET", "/api/settings")
+check("ordinary API quota remains available after polling", status == 200, f"{status}")
+
 print()
 print(f"===== RESULTS: {PASS} passed, {FAIL} failed =====")
 if FAILURES:
