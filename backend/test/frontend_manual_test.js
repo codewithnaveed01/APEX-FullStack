@@ -123,8 +123,23 @@ const event = {preventDefault() {}, target: form};
 
   assert.deepEqual(seed.drivers.map(d => d.id), [1, 2, 3, 4, 5, 6, 7]);
   assert.match(css, /\.trust-track\{[^}]*animation:apexMarquee/);
-  assert.match(css, /body:not\(\.page-admin\) \.cars \.car:hover \.car-photo img[^}]*scale\(1\.045\)/);
-  assert.match(css, /\.car-photo img\{[^}]*object-fit:contain/);
+  assert.match(css, /body:not\(\.page-admin\) \.cars \.car:hover \.car-photo \.car-photo-main[^}]*scale\(1\.035\)/);
+  assert.match(css, /\.cars \.car \.car-photo img\.car-photo-main\{[^}]*inset:0[^}]*object-fit:contain/);
+  assert.match(css, /\.cars \.car \.car-photo img\.car-photo-backdrop\{[^}]*object-fit:cover[^}]*filter:blur/);
+  assert.match(css, /\.footer-spidy\{[^}]*color:#c8242f/);
   assert.match(js, /class="car-hourly"/);
-  console.log('PASS: walk-in CNIC front/back required, privately uploaded and linked; seven seeds, ticker and cards');
+
+  const photoStart = js.indexOf('function carPhotoLayers(c){');
+  const photoEnd = js.indexOf('// Use the visitor', photoStart);
+  assert.ok(photoStart >= 0 && photoEnd > photoStart);
+  ctx.getCarMainPhoto = car => 'assets/' + car.image + '.jpg';
+  ctx.esc = s => String(s).replace(/&/g, '&amp;');
+  vm.runInContext(js.slice(photoStart, photoEnd), ctx);
+  const layers = ctx.carPhotoLayers({name: 'Test & Car', image: 'test'});
+  assert.match(layers, /class="car-photo-backdrop" src="assets\/test\.jpg" alt="" aria-hidden="true"/);
+  assert.match(layers, /class="car-photo-main" src="assets\/test\.jpg" alt="Test &amp; Car"/);
+  assert.equal((layers.match(/src="assets\/test\.jpg"/g) || []).length, 2);
+  vm.runInContext(js.slice(js.indexOf('function footer(){'), js.indexOf('function searchForm(){')), ctx);
+  assert.match(ctx.footer(), /Developed by <strong class="footer-spidy">Spidy<\/strong> <span class="footer-spider" role="img" aria-label="🕷️ Spider emoji"><svg/);
+  console.log('PASS: walk-in CNIC, seven seeds, full-width photo cards and red Spidy footer');
 })().catch(error => { console.error(error); process.exitCode = 1; });
