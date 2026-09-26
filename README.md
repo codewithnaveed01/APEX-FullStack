@@ -46,6 +46,16 @@ in the dashboard inbox and from the message button on the public-facing site.
 Banning/unbanning a CNIC uses the server's atomic endpoints; the saved list is
 reloaded from the database after a refresh instead of a stale browser cache.
 
+## Windows local quick start
+
+**Extract the full ZIP first** (do not run a `.bat` directly inside a ZIP). Install
+and start Docker Desktop, then double-click **`START_APEX.bat` in the extracted
+root folder**. It starts the database and app, waits for `/health`, opens
+http://localhost:3030 and keeps errors visible instead of closing the window.
+See `LOCAL_SETUP.md` for troubleshooting, changing the local port and stopping
+without deleting your saved data. `backend/run.bat` is the manual Java +
+PostgreSQL path; when no database is configured it opens the Docker launcher.
+
 ## Local run (no Docker)
 
 Requirements: JDK 17+, PostgreSQL 14+.

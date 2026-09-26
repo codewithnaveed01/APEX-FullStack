@@ -28,7 +28,8 @@ services:
       APEX_ADMIN_USER: admin
       APEX_ADMIN_PASS: admin1234
     ports:
-      - "3030:3030"
+      # Expose the demo only on this computer (never on the public network).
+      - "127.0.0.1:${APEX_LOCAL_PORT:-3030}:3030"
     volumes:
       - uploads:/app/backend/uploads
 
