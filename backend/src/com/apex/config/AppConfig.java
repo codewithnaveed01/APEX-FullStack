@@ -47,11 +47,18 @@ public final class AppConfig {
 
     public static AppConfig load() {
         String url = env("DATABASE_URL");
+        String pgHost = env("PGHOST");
+        if (url == null && pgHost == null &&
+                (env("RAILWAY_ENVIRONMENT") != null || env("RAILWAY_SERVICE_ID") != null)) {
+            throw new IllegalStateException("No database configured for this Railway app service. " +
+                    "Set DATABASE_URL to a reference to your Postgres service's DATABASE_URL " +
+                    "(for example, ${{Postgres.DATABASE_URL}}) in the app's Variables tab and deploy the changes.");
+        }
         Builder b = new Builder();
-        if (url != null && !url.isBlank()) {
+        if (url != null) {
             parseUrl(url, b);
         } else {
-            b.dbHost = env("PGHOST") != null ? env("PGHOST") : "localhost";
+            b.dbHost = pgHost != null ? pgHost : "localhost";
             b.dbPort = envInt("PGPORT", 5432);
             b.dbUser = env("PGUSER") != null ? env("PGUSER") : "apex";
             b.dbPassword = env("PGPASSWORD") != null ? env("PGPASSWORD") : "";
@@ -69,10 +76,16 @@ public final class AppConfig {
             if (!scheme.equals("postgres") && !scheme.equals("postgresql")) {
                 throw new IllegalArgumentException("Unsupported scheme in DATABASE_URL: " + scheme);
             }
-            if (u.getHost() != null) b.dbHost = u.getHost();
+            if (u.getHost() == null || u.getHost().isBlank() || u.getRawPath() == null ||
+                    u.getRawPath().length() <= 1) {
+                throw new IllegalArgumentException("missing host or database");
+            }
+            b.dbHost = u.getHost();
             if (u.getPort() > 0) b.dbPort = u.getPort();
-            if (u.getUserInfo() != null) {
-                String[] ui = u.getUserInfo().split(":", 2);
+            // getUserInfo() already decodes %, so decoding it again corrupts
+            // passwords containing a literal percent sequence (e.g. %2540).
+            if (u.getRawUserInfo() != null) {
+                String[] ui = u.getRawUserInfo().split(":", 2);
                 if (ui.length == 2) {
                     b.dbUser = decode(ui[0]);
                     b.dbPassword = decode(ui[1]);
@@ -80,9 +93,7 @@ public final class AppConfig {
                     b.dbUser = decode(ui[0]);
                 }
             }
-            if (u.getPath() != null && u.getPath().length() > 1) {
-                b.dbDatabase = decode(u.getPath().substring(1));
-            }
+            b.dbDatabase = decode(u.getRawPath().substring(1));
             for (String kv : (u.getQuery() == null ? "" : u.getQuery()).split("&")) {
                 String[] p = kv.split("=", 2);
                 if (p.length == 2 && p[0].equals("sslmode")) {
@@ -90,13 +101,18 @@ public final class AppConfig {
                 }
             }
         } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("Invalid DATABASE_URL: " + e.getMessage(), e);
+            // URI parse exceptions may contain the entire URL (including the
+            // password); never include their message/cause in deploy logs.
+            throw new IllegalStateException("Invalid DATABASE_URL: expected postgres://USER:PASSWORD@HOST:PORT/DATABASE " +
+                    "(check that the Railway reference is deployed and credentials are URL-encoded)");
         }
     }
 
     private static String decode(String s) {
         try {
-            return java.net.URLDecoder.decode(s, "UTF-8");
+            // URLDecoder treats '+' as space (HTML form encoding), but '+' is
+            // a literal character in a PostgreSQL URI's userinfo/path.
+            return java.net.URLDecoder.decode(s.replace("+", "%2B"), "UTF-8");
         } catch (Exception e) {
             return s;
         }

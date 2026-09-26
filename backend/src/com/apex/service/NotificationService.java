@@ -22,8 +22,8 @@ public final class NotificationService {
         repo.insert(c, id, userId, title, msg, link, adminTab);
     }
 
-    /** Notification to all admins (the frontend admin panel picks these up). */
+    /** Admin alerts must not appear in a customer's notification feed. */
     public void notifyAdmins(PgConnection c, String title, String msg, String link, String adminTab) {
-        notify(c, "all", title, msg, link, adminTab);
+        notify(c, "admin", title, msg, link, adminTab);
     }
 }

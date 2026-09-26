@@ -43,6 +43,21 @@ public final class BookingRepo {
         return Long.parseLong(r.first());
     }
 
+    /** Public availability summary: only car ids, never customer/booking details. */
+    public List<Long> rentedCarIds(String startDt, String endDt) {
+        return db.with(c -> {
+            QueryResult r = c.query("SELECT DISTINCT i.car_id FROM booking_items i" +
+                    " JOIN bookings b ON b.id = i.booking_id" +
+                    " WHERE b.status NOT IN ('Cancelled', 'Completed', 'Rejected')" +
+                    " AND i.start_dt IS NOT NULL AND i.end_dt IS NOT NULL" +
+                    " AND i.start_dt < $2 AND i.end_dt > $1",
+                    new String[]{startDt, endDt});
+            List<Long> ids = new ArrayList<>();
+            for (int i = 0; i < r.rowCount(); i++) ids.add(Long.parseLong(r.rows.get(i)[0]));
+            return ids;
+        });
+    }
+
     /** Insert or update the booking row + its items (items are replaced). */
     public void upsert(PgConnection c, Booking b) {
         if (b.id.isEmpty()) throw com.apex.web.ApiException.bad("Booking id is required");
@@ -121,7 +136,7 @@ public final class BookingRepo {
      */
     public String findOverlap(PgConnection c, long carId, String startDt, String endDt, String excludeBookingId) {
         QueryResult r = c.query(
-                "SELECT b.id, b.customer_name FROM booking_items i" +
+                "SELECT b.id FROM booking_items i" +
                 " JOIN bookings b ON b.id = i.booking_id" +
                 " WHERE i.car_id = $1" +
                 " AND b.id <> $2" +
@@ -132,8 +147,7 @@ public final class BookingRepo {
                 new String[]{String.valueOf(carId), excludeBookingId == null ? "" : excludeBookingId,
                         startDt, endDt});
         if (r.rowCount() == 0) return null;
-        String[] row = r.rows.get(0);
-        return row[0] + " (" + (row[1] == null ? "customer" : row[1]) + ")";
+        return r.rows.get(0)[0];
     }
 
     /** All active windows for one car - used for sync overlap validation. */

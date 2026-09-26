@@ -49,13 +49,31 @@ public final class BookingService {
 
     public JsonObject availability(String carIdStr, String start, String end) {
         long carId = Validation.longValue(carIdStr, "carId");
-        String s = Validation.date(start, "start");
-        String e = Validation.date(end, "end");
-        if (e.compareTo(s) < 0) throw ApiException.validation("End date must be after start date");
-        String startDt = s + "T00:00";
-        String endDt = e + "T23:59";
-        PricingService.hoursBetween(startDt, endDt); // validates parse
-
+        String s = Json.clean(start);
+        String e = Json.clean(end);
+        String startDt, endDt;
+        if (s.matches("\\d{4}-\\d{2}-\\d{2}") && e.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            // Preserve date-only callers: their window covers both whole days.
+            Validation.date(s, "start");
+            Validation.date(e, "end");
+            if (e.compareTo(s) < 0) throw ApiException.validation("End date must be after start date");
+            startDt = s + "T00:00";
+            endDt = e + "T23:59";
+        } else {
+            // The reservation form and fleet badges use exact hourly windows.
+            if (!s.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}") ||
+                    !e.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}")) {
+                throw ApiException.validation("Provide a valid start and end date/time");
+            }
+            Validation.date(s.substring(0, 10), "start");
+            Validation.date(e.substring(0, 10), "end");
+            startDt = PricingService.fmt(PricingService.parse(s));
+            endDt = PricingService.fmt(PricingService.parse(e));
+            if (!s.equals(startDt) || !e.equals(endDt)) {
+                throw ApiException.validation("Provide a valid start and end date/time");
+            }
+        }
+        PricingService.hoursBetween(startDt, endDt);
         return db.with(c -> {
             Car car = cars.get(c, carId);
             if (car == null) throw ApiException.notFound("Car not found");
@@ -65,7 +83,7 @@ public final class BookingService {
             o.addProperty("start", s);
             o.addProperty("end", e);
             o.addProperty("available", clash == null);
-            o.addProperty("clashWith", clash == null ? "" : clash);
+            o.addProperty("clashWith", clash == null ? "" : "Reserved");
             return o;
         });
     }
@@ -74,6 +92,8 @@ public final class BookingService {
 
     public JsonObject create(JsonObject session, JsonObject body) {
         boolean isAdmin = "admin".equals(Json.getStr(session, "role", ""));
+        boolean manual = Json.getBool(body, "manual", false);
+        if (manual && !isAdmin) throw ApiException.forbidden("Only admins can create walk-in bookings");
         String userId = isAdmin
                 ? Json.getStr(body, "userId", "")
                 : Json.getStr(session, "userId", "");
@@ -107,6 +127,9 @@ public final class BookingService {
 
         JsonArray identityDocs = body.has("identityDocs") && body.get("identityDocs").isJsonArray()
                 ? body.getAsJsonArray("identityDocs") : null;
+        if (manual && (identityDocs == null || identityDocs.size() != 2)) {
+            throw ApiException.validation("Walk-in bookings require CNIC front and back photos");
+        }
 
         String status0 = Json.clean(Json.getStr(body, "status", ""));
         String payment = Json.clean(Json.getStr(body, "payment", ""));
@@ -173,15 +196,30 @@ public final class BookingService {
             if (bans.contains(c, fIdentity)) {
                 throw ApiException.forbidden("This CNIC is banned from services");
             }
-            // 3) re-validate identity docs exist
+            // 3) walk-in CNIC photos must both belong to this booking's customer.
+            boolean front = false, back = false;
             if (identityDocs != null) {
                 for (JsonElement el : identityDocs) {
                     long docId = el.isJsonPrimitive() && el.getAsJsonPrimitive().isNumber()
                             ? el.getAsJsonPrimitive().getAsLong() : -1;
-                    if (docId <= 0 || !documents.exists(c, docId)) {
+                    JsonObject doc = docId > 0 ? documents.get(c, docId) : null;
+                    if (doc == null) {
                         throw ApiException.validation("An attached identity document is invalid");
                     }
+                    if (manual) {
+                        if (!"user".equals(Json.getStr(doc, "ownerType", "")) ||
+                                !userId.equals(Json.getStr(doc, "ownerId", ""))) {
+                            throw ApiException.validation("CNIC photos must belong to the walk-in customer");
+                        }
+                        String kind = Json.getStr(doc, "kind", "");
+                        if ("cnic_front".equals(kind)) front = true;
+                        else if ("cnic_back".equals(kind)) back = true;
+                        else throw ApiException.validation("Walk-in bookings require CNIC front and back photos");
+                    }
                 }
+            }
+            if (manual && (!front || !back)) {
+                throw ApiException.validation("Walk-in bookings require CNIC front and back photos");
             }
             // 4) quote + clash check, server side
             long sumBase = 0, sumSaving = 0, sumDriver = 0, sumRental = 0, sumDeposit = 0;
@@ -196,7 +234,7 @@ public final class BookingService {
                 String clash = bookings.findOverlap(c, carId, it.get("startDt").getAsString(),
                         it.get("endDt").getAsString(), "");
                 if (clash != null) {
-                    throw ApiException.conflict("Time clash: " + car.name + " is already booked with " + clash);
+                    throw ApiException.conflict("Time clash: " + car.name + " is already booked for this window");
                 }
                 Long itemDriverRate = it.has("driverRate") && Json.getLong(it, "driverRate", -1) > 0
                         ? Long.valueOf(Json.getLong(it, "driverRate", 0)) : null;
@@ -238,8 +276,9 @@ public final class BookingService {
             order.addProperty("identityType", fIdentityType);
             order.addProperty("identity", fIdentity);
             order.addProperty("identityMasked", maskIdentity(fIdentityType, fIdentity));
-            order.addProperty("identityStatus", Json.clean(Json.getStr(body, "identityStatus", "")).isEmpty()
-                    ? "Pending" : Json.getStr(body, "identityStatus", "Pending"));
+            order.addProperty("identityStatus", manual ? "Pending"
+                    : Json.clean(Json.getStr(body, "identityStatus", "")).isEmpty()
+                            ? "Pending" : Json.getStr(body, "identityStatus", "Pending"));
             order.add("totals", totals);
             order.addProperty("payment", fPayment);
             if (cashPayment(fPayment)) {
@@ -271,11 +310,11 @@ public final class BookingService {
 
             notifs.notifyAdmins(c, "New booking " + b.id,
                     name + " booked " + itemCount(items) + " vehicle(s) - " + start + " to " + end,
-                    "account", "Bookings");
+                    "booking/" + b.id, "Reservations");
             notifs.notify(c, userId, "Booking received",
                     "Your booking " + b.id + " has been received. " +
                     (cashPayment(fPayment) ? "Payment is due at pickup." : "Please upload your payment receipt."),
-                    "account", null);
+                    "booking/" + b.id, null);
             return order;
         });
     }
@@ -308,9 +347,10 @@ public final class BookingService {
             notifs.notify(c, b.userId, "Booking cancelled",
                     "Booking " + b.id + " was cancelled." +
                     (fee > 0 ? " A 5% cancellation fee of " + fee + " PKR applies." : ""),
-                    "account", null);
+                    "booking/" + b.id, null);
             notifs.notifyAdmins(c, "Booking cancelled: " + b.id,
-                    b.customerName + " - " + (fee > 0 ? "fee " + fee : "no fee"), "account", "Bookings");
+                    b.customerName + " - " + (fee > 0 ? "fee " + fee : "no fee"),
+                    "booking/" + b.id, "Reservations");
             return b.data;
         });
     }
@@ -337,7 +377,7 @@ public final class BookingService {
             b.data.addProperty("pickupAt", AuthService.nowIso());
             bookings.upsert(c, b);
             notifs.notify(c, b.userId, "Vehicle picked up",
-                    "Your booking " + b.id + " is now active. Enjoy the ride!", "account", null);
+                    "Your booking " + b.id + " is now active. Enjoy the ride!", "booking/" + b.id, null);
             return b.data;
         });
     }
@@ -415,10 +455,10 @@ public final class BookingService {
                             ? " " + late.extraHours + " late hour(s) after " + grace + " min grace - " +
                               late.charges + " PKR late charges apply."
                             : " Thank you for choosing APEX!"),
-                    "account", null);
+                    "booking/" + b.id, null);
             notifs.notifyAdmins(c, "Booking completed: " + b.id,
                     b.customerName + (late.charges > 0 ? " - late charges " + late.charges : ""),
-                    "account", "Bookings");
+                    "booking/" + b.id, "Reservations");
             return b.data;
         });
     }

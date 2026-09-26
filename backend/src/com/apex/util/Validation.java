@@ -88,7 +88,11 @@ public final class Validation {
         if (!v.matches("^\\d{4}-\\d{2}-\\d{2}$")) {
             throw ApiException.validation("Invalid " + field + " (expected YYYY-MM-DD)");
         }
-        java.time.LocalDate.parse(v); // throws on impossible dates
+        try {
+            java.time.LocalDate.parse(v);
+        } catch (java.time.format.DateTimeParseException ex) {
+            throw ApiException.validation("Invalid " + field + " (expected YYYY-MM-DD)");
+        }
         return v;
     }
 

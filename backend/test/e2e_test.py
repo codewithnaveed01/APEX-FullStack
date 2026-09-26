@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """APEX backend end-to-end test suite (runs against 127.0.0.1:3030)."""
-import json, urllib.request, urllib.error, uuid, sys, concurrent.futures, time
+import json, urllib.request, urllib.error, uuid, sys, concurrent.futures, time, os
 
-BASE = "http://127.0.0.1:3030"
+BASE = os.environ.get("APEX_TEST_BASE", "http://127.0.0.1:3030").rstrip("/")
+ADMIN_PASS = os.environ.get("APEX_TEST_ADMIN_PASS", "admin1234")
 PASS, FAIL = 0, 0
 FAILURES = []
 
@@ -57,7 +58,7 @@ s, b = req("GET", "/api/nope")
 check("unknown api 404 + error json", s == 404 and isinstance(b, dict) and "error" in b, f"{s} {b}")
 
 print("== 2. Auth ==")
-s, b = req("POST", "/api/auth/login", {"username": "admin", "password": "admin1234"})
+s, b = req("POST", "/api/auth/login", {"username": "admin", "password": ADMIN_PASS})
 check("admin login", s == 200 and b.get("role") == "admin" and b.get("token"), f"{s} {b if s != 200 else 'ok'}")
 admin = b.get("token") if s == 200 else None
 s, b = req("POST", "/api/auth/login", {"username": "admin", "password": "wrong"})
@@ -94,6 +95,11 @@ s, b = req("GET", "/api/notifications", token=cust)
 check("customer on admin endpoint 403", s == 403, f"{s}")
 
 print("== 3. Bootstrap ==")
+s, seeded_drivers = req("GET", "/api/drivers")
+check("seven seeded drivers at branch cities", s == 200 and
+      [d.get("id") for d in seeded_drivers] == list(range(1, 8)) and
+      {d.get("city") for d in seeded_drivers} ==
+      {"Lahore", "Islamabad", "Karachi", "Dera Ghazi Khan"}, f"{s} {seeded_drivers}")
 s, b = req("GET", "/api/bootstrap")
 check("public bootstrap fleet", s == 200 and len(b.get("fleet", [])) == 13, f"{s} fleet={len(b.get('fleet', [])) if isinstance(b, dict) else b}")
 check("public bootstrap config", isinstance(b.get("config"), dict) and b["config"].get("driverRate", 0) > 0, f"{b.get('config') if isinstance(b, dict) else b}")
@@ -130,6 +136,8 @@ d1 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 3))
 d2 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 4))
 s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}&end={d2}")
 check("availability free", s == 200 and b.get("available") is True, f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}T09:00&end={d2}T09:00")
+check("exact hourly availability free", s == 200 and b.get("available") is True, f"{s} {b}")
 
 def mk_order(car_ids, start, end, token, service="Self-drive", cnic="3520212345678", payment="JazzCash", extra=None):
     body = {
@@ -158,11 +166,25 @@ totals = order1.get("totals", {})
 check("totals consistent", totals.get("rental", -1) + totals.get("deposit", 0) == totals.get("total", -2), f"{totals}")
 
 s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}&end={d2}")
-check("availability now clash", s == 200 and b.get("available") is False and b.get("clashWith"), f"{s} {b}")
+check("availability now clash", s == 200 and b.get("available") is False and b.get("clashWith") == "Reserved", f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}T09:00&end={d2}T09:00")
+check("hourly availability detects booked window without exposing customer", s == 200 and b.get("available") is False and b.get("clashWith") == "Reserved" and (not oid or oid not in str(b)) and "Test Customer" not in str(b), f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d1}T07:00&end={d1}T09:00")
+check("hourly availability allows window ending at pickup", s == 200 and b.get("available") is True, f"{s} {b}")
+s, b = req("GET", f"/api/availability?carId={car_id}&start={d2}T09:00&end={d2}T10:00")
+check("hourly availability allows window starting at return", s == 200 and b.get("available") is True, f"{s} {b}")
+for invalid_start, invalid_end in [(d2+"T10:00", d2+"T09:00"), (d1, d2+"T09:00"), ("2026-02-30T09:00", d2+"T09:00"), ("2026-02-30", d2)]:
+    s, b = req("GET", f"/api/availability?carId={car_id}&start={invalid_start}&end={invalid_end}")
+    check("invalid availability window rejected", s == 422, f"{s} {b}")
+s, summary = req("GET", f"/api/availability/fleet?start={d1}T09:00&end={d2}T09:00")
+check("public fleet availability flags rented car", s == 200 and car_id in summary.get("rentedIds", []), f"{s} {summary}")
+check("public availability exposes no booking details", s == 200 and set(summary) == {"rentedIds"}, f"{summary}")
+s, b = req("GET", "/api/availability/fleet?start=bad&end=bad")
+check("invalid fleet window rejected", s == 422, f"{s} {b}")
 
 # overlapping window must clash (back-to-back is allowed, overlap is not)
 s, b = mk_order([car_id], d1, time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 6)), cust)
-check("partial overlap rejected 409", s == 409 and "clash" in str(b.get("error", "")).lower(), f"{s} {b}")
+check("partial overlap rejected 409 without booking identity", s == 409 and "clash" in str(b.get("error", "")).lower() and "Test Customer" not in str(b) and (not oid or oid not in str(b)), f"{s} {b}")
 
 # concurrency: 4 parallel bookings, same car & window (using a different car)
 conc_car = fleet[1]["id"]
@@ -197,9 +219,42 @@ check("other customer's booking 403", s == 403, f"{s} {b}")
 s, b = req("GET", f"/api/orders/{oid}", token=cust)
 check("own booking 200", s == 200 and b.get("id") == oid, f"{s}")
 
+print("== 5a. Recipient-scoped notifications and live feed ==")
+s, b = req("GET", "/api/live")
+check("live feed requires sign-in", s == 401, f"{s} {b}")
+s, customer_live = req("GET", "/api/live", token=cust)
+check("customer live feed has own booking alert", s == 200 and any(n.get("link") == f"booking/{oid}" for n in customer_live.get("notifications", [])), f"{s} {customer_live}")
+check("customer cannot see admin notifications", s == 200 and all(n.get("userId") == cust_id for n in customer_live["notifications"]), f"{customer_live.get('notifications')}")
+s, second_live = req("GET", "/api/live", token=cust2)
+check("second customer cannot see first customer's alerts", s == 200 and not second_live.get("notifications") and all(c.get("userId") != cust_id for c in second_live.get("chats", [])), f"{s} {second_live}")
+s, admin_live = req("GET", "/api/live", token=admin)
+check("admin sees its own booking alert only", s == 200 and any(n.get("link") == f"booking/{oid}" for n in admin_live.get("notifications", [])) and all(n.get("userId") in ("admin", "all") for n in admin_live["notifications"]), f"{s} {admin_live.get('notifications')}")
+s, b = req("POST", "/api/notifications/read", {}, token=cust)
+check("customer marks own alerts read", s == 200 and all(n.get("read") for n in req("GET", "/api/notifications/mine", token=cust)[1]), f"{s} {b}")
+s, b = req("GET", "/api/notifications/mine", token=admin)
+check("customer read does not clear admin alerts", s == 200 and any(not n.get("read") for n in b), f"{s} {b}")
+s, application = req("POST", "/api/applications", {
+    "owner": "Test Customer", "brand": "Toyota", "model": "Yaris", "city": "Lahore", "year": 2024,
+    "status": "Submitted"}, token=cust)
+app_id = application.get("id") if s == 201 else None
+check("customer submits vehicle application", s == 201 and app_id, f"{s} {application}")
+s, b = req("GET", "/api/live", token=cust)
+check("customer application alert links to exact item", s == 200 and any(n.get("link") == f"application/{app_id}" for n in b.get("notifications", [])), f"{s} {b.get('notifications')}")
+s, b = req("GET", f"/api/applications/{app_id}", token=cust)
+check("customer opens own application", s == 200 and b.get("id") == app_id, f"{s} {b}")
+s, b = req("GET", f"/api/applications/{app_id}", token=cust2)
+check("another customer cannot open application", s == 403, f"{s} {b}")
+s, b = req("GET", f"/api/applications/{app_id}", token=admin)
+check("admin opens application", s == 200 and b.get("id") == app_id, f"{s} {b}")
+s, b = req("GET", "/api/live", token=admin)
+check("application alert links to exact application", s == 200 and any(n.get("link") == f"application/{app_id}" for n in b.get("notifications", [])), f"{s} {b.get('notifications')}")
+
 print("== 6. Banned CNIC ==")
 s, b = req("POST", "/api/banned-cnic", {"cnic": "9990001112223"}, token=admin)
 check("ban cnic 201", s == 201, f"{s} {b}")
+s, refreshed = req("GET", "/api/bootstrap", token=admin)
+check("admin refresh retains banned CNIC", s == 200 and
+      any(x.get("cnic") == "9990001112223" for x in refreshed.get("bannedCNICs", [])), f"{s} {refreshed.get('bannedCNICs')}")
 s, b = req("POST", "/api/banned-cnic", {"cnic": "123"}, token=admin)
 check("ban bad cnic 422", s == 422, f"{s}")
 d3 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 20))
@@ -209,6 +264,9 @@ s, b = req("GET", "/api/banned-cnic")
 check("public banned list", s == 200 and any(x.get("cnic") == "9990001112223" for x in b), f"{s} {b}")
 s, b = req("DELETE", "/api/banned-cnic/9990001112223", token=admin)
 check("unban 200", s == 200, f"{s}")
+s, refreshed = req("GET", "/api/bootstrap", token=admin)
+check("admin refresh retains unban", s == 200 and
+      not any(x.get("cnic") == "9990001112223" for x in refreshed.get("bannedCNICs", [])), f"{s} {refreshed.get('bannedCNICs')}")
 
 print("== 7. Documents ==")
 data_url = "data:image/png;base64," + __import__("base64").b64encode(png_bytes()).decode()
@@ -357,10 +415,30 @@ s, chats = req("GET", "/api/chats", token=admin)
 check("admin lists chats", s == 200 and any(c.get("userId") == cust_id for c in chats), f"{s}")
 s, b = req("POST", "/api/chats/send", {"text": "", "from": "user"}, cust)
 check("empty chat 422", s == 422, f"{s}")
+s, b = req("POST", "/api/chats/send", {"text": "Impersonated reply", "from": "admin", "userId": "someone-else"}, cust)
+check("customer cannot impersonate admin", s == 403, f"{s} {b}")
+s, b = req("POST", "/api/chats/send", {"text": "Impersonated user", "from": "user", "userId": "someone-else"}, cust)
+check("customer cannot message as another user", s == 403, f"{s} {b}")
+s, b = req("GET", "/api/chats/mine", token=cust)
+check("customer can see own thread", s == 200 and b.get("userId") == cust_id and len(b.get("messages", [])) == 2, f"{s} {b}")
+s, b = req("GET", "/api/chats", token=cust)
+check("customer cannot list all threads", s == 403, f"{s} {b}")
+s, b = req("GET", "/api/live", token=cust2)
+check("other customer's live chat is isolated", s == 200 and all(c.get("userId") != cust_id for c in b.get("chats", [])), f"{s} {b}")
+s, b = req("GET", "/api/live", token=cust)
+check("customer sees reply notification for exact chat", s == 200 and any(n.get("link") == f"chat/{cust_id}" for n in b.get("notifications", [])), f"{s} {b.get('notifications')}")
+s, b = req("POST", "/api/chats/read", {}, cust)
+check("customer clears only their unread replies", s == 200 and b.get("unreadUser") == 0 and b.get("unreadAdmin") == 1, f"{s} {b}")
+s, b = req("POST", "/api/chats/read", {"userId": cust_id}, token=admin)
+check("admin clears only customer thread's admin unread", s == 200 and b.get("unreadAdmin") == 0, f"{s} {b}")
 
 print("== 13. Wallet admin ops ==")
 s, w = req("GET", "/api/wallet", token=admin)
 check("wallet shape", s == 200 and "balance" in w and "ownerWallets" in w and "transactions" in w, f"{s}")
+s, mine = req("GET", "/api/wallet/mine", token=cust)
+check("customer only sees own owner balance", s == 200 and mine == {"balance": 0} and "ownerWallets" not in mine, f"{s} {mine}")
+s, b = req("GET", "/api/wallet/mine")
+check("private wallet needs sign-in", s == 401, f"{s} {b}")
 s, b = req("POST", "/api/wallet/add-cash", {"amount": 5000, "note": "cash in"}, token=admin)
 check("add cash", s == 200 and b.get("balance") == w.get("balance") + 5000, f"{s} {b}")
 s, b = req("POST", "/api/wallet/withdraw", {"amount": w.get("balance") + 999999, "account": "owner_786"}, token=admin)
@@ -412,6 +490,15 @@ check("sync did NOT touch ownerWallets", w.get("ownerWallets", {}).get("hacked")
 s, bs2 = req("GET", "/api/bootstrap", token=admin)
 check("sync preserved orders count", len(bs2.get("orders", [])) == len(bs.get("orders", [])), f"{len(bs2.get('orders', []))} vs {len(bs.get('orders', []))}")
 check("sync preserved users", len(bs2.get("users", [])) == len(bs.get("users", [])), f"{len(bs2.get('users', []))} vs {len(bs.get('users', []))}")
+# A stale browser can have invalid records in unrelated collections. The
+# frontend sends only the edited keys; verify the backend accepts that patch.
+s, b = req("PUT", "/api/sync", {"users": [{"id": "old-cache-without-username"}]}, token=admin)
+check("invalid legacy user reports specific 422", s == 422 and "username" in b.get("error", ""), f"{s} {b}")
+settings_before = req("GET", "/api/settings")[1]
+s, b = req("PUT", "/api/sync", {"config": {**settings_before, "driverRate": 7600}}, token=admin)
+check("config-only sync avoids unrelated invalid users", s == 200 and b.get("status") == "synced", f"{s} {b}")
+check("config-only sync persisted", req("GET", "/api/settings")[1].get("driverRate") == 7600, "")
+req("PUT", "/api/sync", {"config": settings_before}, token=admin)  # restore
 # sync with an overlapping order must fail atomically
 bad_state = dict(state)
 bad_orders = [o for o in bs.get("orders", []) if o.get("id") != oid]
@@ -433,11 +520,79 @@ check("sync with double-booking 409", s == 409 and "clash" in str(b.get("error",
 s, bs3 = req("GET", "/api/bootstrap", token=admin)
 check("failed sync rolled back (no BCLASH1)", all(o.get("id") != "BCLASH1" for o in bs3.get("orders", [])), "")
 
+print("== 16a. Recipient-only notification cleanup ==")
+s, b = req("GET", "/api/notifications/mine", token=admin)
+admin_alerts_before = len(b) if s == 200 else 0
+s, b = req("DELETE", "/api/notifications/mine", token=cust)
+check("customer can clear own notifications", s == 200 and req("GET", "/api/notifications/mine", token=cust)[1] == [], f"{s} {b}")
+s, b = req("GET", "/api/notifications/mine", token=admin)
+check("customer clear does not touch admin inbox", s == 200 and len(b) == admin_alerts_before, f"{s} {b}")
+
 print("== 17. Session invalidation ==")
 s, b = req("POST", "/api/auth/logout", {}, token=cust2)
 check("logout 200", s == 200, f"{s}")
 s, b = req("GET", "/api/auth/me", token=cust2)
 check("token dead after logout", s == 401, f"{s}")
+
+print("== 18. Shared-IP polling does not exhaust the normal API quota ==")
+for endpoint, label, token in [
+    ("/api/live", "authenticated live feed", cust),
+    (f"/api/availability/fleet?start={d1}T09:00&end={d2}T09:00", "fleet availability", None),
+]:
+    failed_at = None
+    for n in range(305):  # above the 300/10min quota for ordinary requests
+        status, _ = req("GET", endpoint, token=token)
+        if status != 200:
+            failed_at = (n + 1, status)
+            break
+    check(label + " has its own bounded polling quota", failed_at is None, f"first failure: {failed_at}")
+status, _ = req("GET", "/api/settings")
+check("ordinary API quota remains available after polling", status == 200, f"{status}")
+
+print("== 19. Walk-in booking requires private CNIC front and back ==")
+walkin_id = "guest-e2e-" + uuid.uuid4().hex[:8]
+w1 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 55))
+w2 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 56))
+walkin_extra = {"manual": True, "userId": walkin_id, "status": "Confirmed",
+                "identityStatus": "Verified", "paid": 0, "payment": "Cash on pickup"}
+walkin_car = fleet[8]["id"]
+s, b = mk_order([walkin_car], w1, w2, admin, extra=walkin_extra)
+check("walk-in without CNIC photos rejected", s == 422 and "CNIC" in b.get("error", ""), f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, cust, extra=walkin_extra)
+check("customer cannot bypass walk-in documents", s == 403, f"{s} {b}")
+front_status, front = req("POST", "/api/uploads", {
+    "dataUrl": data_url, "kind": "cnic_front", "ownerType": "user", "ownerId": walkin_id}, admin)
+back_status, back = req("POST", "/api/uploads", {
+    "dataUrl": data_url, "kind": "cnic_back", "ownerType": "user", "ownerId": walkin_id}, admin)
+check("admin uploaded both private CNIC photos", front_status == back_status == 201 and front.get("id") != back.get("id"), f"{front_status} {back_status}")
+front_id, back_id = front.get("id"), back.get("id")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id, front_id]})
+check("walk-in cannot use two front photos", s == 422, f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id]})
+check("walk-in cannot use one photo", s == 422, f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "userId": "guest-other", "identityDocs": [front_id, back_id]})
+check("walk-in cannot attach another customer's CNIC", s == 422, f"{s} {b}")
+s, walkin = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id, back_id]})
+check("walk-in with both CNIC photos saved", s == 201 and walkin.get("manual") is True and walkin.get("identityDocs") == [front_id, back_id], f"{s} {walkin}")
+check("walk-in CNIC not auto-verified", walkin.get("identityStatus") == "Pending" and walkin.get("status") == "Confirmed", f"{walkin}")
+walkin_booking_id = walkin.get("id")
+s, saved_walkin = req("GET", f"/api/orders/{walkin_booking_id}", token=admin)
+check("walk-in photos linked after reload", s == 200 and saved_walkin.get("identityDocs") == [front_id, back_id], f"{s} {saved_walkin}")
+s, b = req("GET", f"/api/documents/{back_id}", token=admin)
+check("admin can view walk-in CNIC image", s == 200 and b.get("dataUrl", "").startswith("data:image/png;base64,"), f"{s}")
+s, b = req("GET", f"/api/documents/{front_id}", token=cust)
+check("unrelated customer cannot view walk-in CNIC", s == 403, f"{s} {b}")
+s, b = mk_order([walkin_car], w1, w2, admin, extra={**walkin_extra, "identityDocs": [front_id, back_id]})
+check("walk-in reservation respects booked dates", s == 409, f"{s} {b}")
+same_day = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 60))
+hourly_item = {"carId": walkin_car, "start": same_day, "end": same_day,
+               "startDt": same_day + "T10:00", "endDt": same_day + "T18:00",
+               "city": "Lahore", "service": "Self-drive"}
+s, hourly = mk_order([walkin_car], same_day, same_day, admin, extra={
+    **walkin_extra, "identityDocs": [front_id, back_id], "items": [hourly_item]})
+check("same-day walk-in uses real hourly window", s == 201 and
+      hourly.get("items", [{}])[0].get("price", {}).get("hours") == 8,
+      f"{s} {hourly}")
 
 print()
 print(f"===== RESULTS: {PASS} passed, {FAIL} failed =====")

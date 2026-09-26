@@ -34,7 +34,8 @@ public final class AdminController {
         });
 
         r.get("/api/health", Router.Level.PUBLIC, ctx -> {
-            HttpUtil.sendJson(ctx.ex, 200, health());
+            JsonObject result = health();
+            HttpUtil.sendJson(ctx.ex, "ok".equals(result.get("status").getAsString()) ? 200 : 503, result);
         });
     }
 

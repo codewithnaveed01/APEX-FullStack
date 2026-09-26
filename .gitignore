@@ -1,5 +1,7 @@
 # Runtime secrets/config (never commit)
 backend/.env
+backend/.env.*
+!backend/.env.example
 
 # User uploads — keep the folder, ignore contents
 backend/uploads/*

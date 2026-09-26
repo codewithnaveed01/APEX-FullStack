@@ -18,10 +18,8 @@ final class Scram {
 
     static final SecureRandom RANDOM = new SecureRandom();
 
-    // Small state machine shared with PgConnection (single in-flight
-    // auth per connection by design).
-    static String[] step(String serverFirst) {
-        String[] st = (String[]) scramState;
+    // State is owned by the caller's connection, not shared across the pool.
+    static String[] step(String serverFirst, String[] st) {
         String r = kv(serverFirst, "r"), s = kv(serverFirst, "s"), i = kv(serverFirst, "i");
         if (r == null || s == null || i == null) throw new PgConnection.PgException("28000", "Bad server-first-message");
         if (!r.startsWith(st[0])) throw new PgConnection.PgException("28000", "Server nonce does not extend client nonce");
@@ -34,12 +32,15 @@ final class Scram {
         String authMessage = st[2] + "," + serverFirst + "," + cfb;
         byte[] sig = hmac(storedKey, authMessage.getBytes(StandardCharsets.UTF_8));
         byte[] proof = xor(clientKey, sig);
-        byte[] serverKey = hmac(storedKey, "Server Key");
+        // ServerKey derives directly from the salted password (NOT StoredKey).
+        byte[] serverKey = hmac(salted, "Server Key");
         String expectedSig = Base64.getEncoder().encodeToString(hmac(serverKey, authMessage.getBytes(StandardCharsets.UTF_8)));
         return new String[]{cfb + ",p=" + Base64.getEncoder().encodeToString(proof), expectedSig};
     }
 
     static void verifyFinal(String serverFinal, String expectedSig) {
+        String error = kv(serverFinal, "e");
+        if (error != null) throw new PgConnection.PgException("28000", "SCRAM authentication rejected: " + error);
         String v = kv(serverFinal, "v");
         if (v == null || !constantTimeEquals(v, expectedSig)) {
             throw new PgConnection.PgException("28000", "SCRAM server signature mismatch");
@@ -49,10 +50,6 @@ final class Scram {
     static String[] init(String password, String bare, String nonce) {
         return new String[]{nonce, password, bare};
     }
-
-    /** Scratch holder so the state machine stays inside PgConnection's auth loop. */
-    static Object scramState;
-    static String scramExpectedServerSig;
 
     static String randomNonce() {
         byte[] b = new byte[18];

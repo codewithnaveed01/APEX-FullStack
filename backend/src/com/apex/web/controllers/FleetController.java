@@ -151,6 +151,19 @@ public final class FleetController {
             HttpUtil.sendJson(ctx.ex, 200, a);
         });
 
+        r.get("/api/applications/{id}", Router.Level.ANY, ctx -> {
+            String id = Json.clean(ctx.param("id"));
+            JsonObject item = app.db.with(c -> {
+                var application = app.apps.get(c, id);
+                if (application == null) throw ApiException.notFound("Application not found");
+                if (!ctx.isAdmin() && !application.userId.equals(Json.getStr(ctx.session, "userId", ""))) {
+                    throw ApiException.forbidden("Access to this application is restricted");
+                }
+                return application.toJson();
+            });
+            HttpUtil.sendJson(ctx.ex, 200, item);
+        });
+
         r.post("/api/applications", Router.Level.ANY, ctx -> {
             JsonObject created = app.db.tx(c -> {
                 JsonObject d = ctx.body.deepCopy();
@@ -164,7 +177,11 @@ public final class FleetController {
                 app.apps.upsert(c, a0);
                 app.notifications.notifyAdmins(c, "New owner application",
                         a0.owner + " applied with " + a0.brand + " " + a0.model,
-                        "account", "Applications");
+                        "application/" + a0.id, "Partner applications");
+                if (!a0.userId.isEmpty()) {
+                    app.notifications.notify(c, a0.userId, "Application submitted",
+                            "Your vehicle application has been received.", "application/" + a0.id, null);
+                }
                 return d;
             });
             HttpUtil.sendJson(ctx.ex, 201, created);
