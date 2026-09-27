@@ -77,7 +77,19 @@ java -cp "out:lib/*" com.apex.Main
 
 Open http://localhost:3030 — migrations run automatically, fleet is seeded from
 `seed.json`, and the admin account is created **once** from `APEX_ADMIN_USER` /
-`APEX_ADMIN_PASS` (defaults `admin` / `admin1234` — change them in production).
+`APEX_ADMIN_PASS` (defaults `admin` / `admin1234` — change them immediately).
+In **Operations → Settings → Admin login details**, enter the current password to
+change the admin username and/or password. A new password must be at least 12
+characters (at most 72 UTF-8 bytes); leave it blank to change only the username.
+The current browser receives a fresh session; **other admin sessions are signed
+out**. Changes survive restart: the seed credentials are not reapplied.
+
+All customer and admin passwords in PostgreSQL are salted one-way **BCrypt
+hashes**, not reversible encryption. On startup, older plaintext entries in
+`password_hash` or legacy user JSON are converted and those JSON secret fields
+removed without resetting logins. If an older database was ever copied/backed
+up with plaintext secrets, protect/remove those historical backups and rotate
+those passwords; a migration cannot erase old backups or database WAL history.
 
 ## Docker
 
@@ -98,6 +110,12 @@ node backend/test/frontend_live_test.js
 node backend/test/frontend_availability_test.js
 node backend/test/frontend_manual_test.js
 node backend/test/frontend_admin_support_ban_test.js
+node backend/test/frontend_admin_credentials_test.js
+
+# Credential rotation changes the admin login; run only on a disposable local DB:
+# APEX_TEST_ALLOW_ADMIN_ROTATION=disposable-local-db APEX_TEST_BASE=http://127.0.0.1:3030 \
+#   python3 backend/test/admin_credentials_e2e.py initial
+# Restart the backend with the same test DB, then rerun with "restart".
 
 # With a LOCAL PostgreSQL URL accessible from the host and JDK 17 installed:
 bash backend/build.sh
@@ -201,7 +219,8 @@ All configuration is environment-based (see `backend/.env.example`):
 | `PORT` | HTTP port | `3030` |
 | `DATABASE_URL` | `postgres://user:pass@host:port/db?sslmode=require` | — |
 | `PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE` | alternative to URL | local |
-| `APEX_ADMIN_USER` / `APEX_ADMIN_PASS` | seeded admin (once) | `admin` / `admin1234` |
+| `APEX_ADMIN_USER` / `APEX_ADMIN_PASS` | seeded admin (once); afterwards edit in Operations → Settings | `admin` / `admin1234` |
+| `APEX_BIND_HOST` | optional bind address (local ZIP uses loopback; Docker/Railway default to all interfaces) | `0.0.0.0` |
 | `APEX_SESSION_HOURS` | session lifetime | `24` |
 | `APEX_DB_POOL` | connection pool size | `5` |
 | `APEX_HOME` / `APEX_STATIC` / `APEX_UPLOADS` | paths | auto |
@@ -209,7 +228,8 @@ All configuration is environment-based (see `backend/.env.example`):
 ## API overview
 
 `GET /health` · `GET/PUT /api/settings` · `POST /api/auth/{register,login,logout}` ·
-`GET /api/auth/me` · `GET /api/bootstrap` · `PUT /api/sync` (admin) ·
+`GET /api/auth/me` · `PUT /api/admin/credentials` (admin; current password required) ·
+`GET /api/bootstrap` · `PUT /api/sync` (admin) ·
 `GET/POST/PUT/DELETE /api/fleet[/{id}]` · `GET /api/availability` ·
 `POST /api/orders` + `GET/PUT/DELETE /api/orders/{id}` ·
 `POST /api/bookings/{id}/{pickup,return,cancel}` ·
@@ -225,7 +245,9 @@ Errors always return `{"error": "message"}` with the proper status code.
 
 ## Security notes
 
-- Passwords hashed with BCrypt; sessions are opaque random tokens in Postgres.
+- Passwords use per-account salted BCrypt hashes; older plaintext records are
+  migrated on startup. Sessions are opaque random tokens in Postgres, revoked
+  when an admin changes credentials.
 - Admin credentials exist only server-side — nothing sensitive is in `customer.js`.
 - CNIC / licence / receipt uploads: image magic-byte validation, 2.5 MB cap, stored in
   Postgres, readable only by the owner or an admin (no public URLs).

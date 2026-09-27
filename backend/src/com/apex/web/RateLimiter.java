@@ -50,7 +50,8 @@ public final class RateLimiter {
     }
 
     private static String classify(String path, String method) {
-        if (path.startsWith("/api/auth/") && "POST".equals(method)) return "auth";
+        if ((path.startsWith("/api/auth/") && "POST".equals(method)) ||
+                ("/api/admin/credentials".equals(path) && "PUT".equals(method))) return "auth";
         if (path.startsWith("/api/uploads")) return "upload";
         if ("GET".equals(method) && "/api/live".equals(path)) return "live";
         if ("GET".equals(method) && "/api/availability/fleet".equals(path)) return "availability";

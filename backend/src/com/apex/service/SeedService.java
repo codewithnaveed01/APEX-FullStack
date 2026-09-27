@@ -39,19 +39,23 @@ public final class SeedService {
     }
 
     public void run() {
+        int cleaned = users.hardenExistingPasswords();
+        if (cleaned > 0) com.apex.log.Logger.info("Hardened credentials for {} existing account(s)", cleaned);
         ensureAdmin();
         seedFleetIfEmpty();
     }
 
     private void ensureAdmin() {
         db.tx(c -> {
-            User existing = users.findByLogin(c, cfg.adminUsername);
+            // A renamed admin must NOT be replaced by a new default admin on
+            // restart. Check the admin role, not the original seed username.
+            User existing = users.findAdmin(c);
             if (existing != null) {
-                if (!existing.isAdmin()) {
-                    throw ApiException.server("User '" + cfg.adminUsername + "' exists but is not an admin - refusing to seed");
-                }
-                com.apex.log.Logger.info("Admin account '{}' already present - skipping", cfg.adminUsername);
+                com.apex.log.Logger.info("Admin account '{}' already present - skipping", existing.username);
                 return null;
+            }
+            if (users.findByLogin(c, cfg.adminUsername) != null || users.get(c, "UADMIN") != null) {
+                throw ApiException.server("Admin seed username or ID is already used by a non-admin account");
             }
             String id = "UADMIN";
             JsonObject data = new JsonObject();

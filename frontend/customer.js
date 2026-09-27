@@ -56,6 +56,18 @@ if(!Array.isArray(fleet)){fleet=defaultFleet;write('fleet',fleet);}
 let drivers=read('drivers',[{id:1,name:'Ali Raza',phone:'+92 300 0000101',city:'Lahore',experience:8,license:'LHR-xxx102',active:true},{id:2,name:'Imran Shah',phone:'+92 300 0000102',city:'Islamabad',experience:11,license:'ISB-xxx209',active:true},{id:3,name:'Bilal Ahmed',phone:'+92 300 0000103',city:'Karachi',experience:6,license:'KHI-xxx311',active:false},{id:4,name:'Farhan Malik',phone:'+92 300 0000104',city:'Dera Ghazi Khan',experience:7,license:'RWP-xxx412',active:true},{id:5,name:'Hamza Khan',phone:'+92 300 0000105',city:'Lahore',experience:5,license:'LHR-xxx527',active:true},{id:6,name:'Asad Mahmood',phone:'+92 300 0000106',city:'Karachi',experience:9,license:'FSD-xxx639',active:true},{id:7,name:'Danish Iqbal',phone:'+92 300 0000107',city:'Islamabad',experience:6,license:'ISB-xxx746',active:true}]);
 let orders=read('orders',[]),applications=read('applications',[]),account=read('session',null),cart=read('cart',[]);
 let users=read('users',[]);
+// Old demos cached plaintext passwords. Never preserve or send those browser
+// copies; real credentials live as BCrypt hashes in PostgreSQL and are
+// verified only by the Java auth endpoint.
+function withoutCachedPassword(user){
+  if(!user||typeof user!=='object')return user;
+  const clean={...user};
+  delete clean.password;delete clean.passwordHash;delete clean.password_hash;delete clean.pass;
+  return clean;
+}
+users=(Array.isArray(users)?users:[]).map(withoutCachedPassword);
+write('users',users);
+if(account){account=withoutCachedPassword(account);write('session',account)}
 let notifications=read('notifications',[]);
 let chats=read('chats',[]);
 let trip=read('trip',{city:'Lahore',start:localDateOffset(1),end:localDateOffset(2),service:'Self-drive'});
@@ -323,7 +335,7 @@ function previewFleetImage(input, type){
   reader.readAsDataURL(file);
 }
 
-function persist(){write('fleet',fleet);write('drivers',drivers);write('orders',orders);write('applications',applications);write('cart',cart);write('trip',trip);write('config',config);write('adminSession',adminSession);write('notifications',notifications);write('session',account);write('users',users);write('chats',chats);write('adminWallet',adminWallet);write('ownerWallets',ownerWallets);write('bannedCNICs',bannedCNICs);}
+function persist(){users=users.map(withoutCachedPassword);if(account)account=withoutCachedPassword(account);write('fleet',fleet);write('drivers',drivers);write('orders',orders);write('applications',applications);write('cart',cart);write('trip',trip);write('config',config);write('adminSession',adminSession);write('notifications',notifications);write('session',account);write('users',users);write('chats',chats);write('adminWallet',adminWallet);write('ownerWallets',ownerWallets);write('bannedCNICs',bannedCNICs);}
 const initials=n=>esc(n.split(' ').map(s=>s[0]).slice(0,2).join(''));
 function toast(t){const el=document.getElementById('toast');el.textContent=t;el.classList.add('show');clearTimeout(window.toastTime);window.toastTime=setTimeout(()=>el.classList.remove('show'),4000)}
 function go(p){if(location.hash.slice(1)===p){render();scrollTo(0,0)}else location.hash=p}
@@ -552,31 +564,6 @@ function auth(signup=true,next='home'){
   `<div class="auth-panel"><div class="eyebrow">${isSignup?'JOIN APEX':'WELCOME BACK'}</div><h2 style="margin-bottom:8px">${isSignup?'Your next journey starts here.':'Welcome back.'}</h2><p class="small muted" style="margin-bottom:18px">${isSignup?'Create an account to manage your bookings and messages.':'Sign in with your username or email and password.'}</p><form onsubmit="submitAuth(event,${isSignup},'${next}')" id="auth-form"><div id="auth-error"></div><div class="formgrid">${isSignup?'<div class="field wide"><label>Full name</label><input name="name" required minlength="2" maxlength="70" placeholder="e.g. Ali Hassan"></div>':''}<div class="field ${isSignup?'':'wide'}"><label>Username</label><input name="username" required minlength="3" maxlength="20" pattern="[A-Za-z0-9_]{3,20}" placeholder="${isSignup?'apex_user123':'your username or email'}" autocomplete="username"></div>${isSignup?'<div class="field"><label>Email address</label><input name="email" type="email" required placeholder="you@example.com" autocomplete="email"></div>':''}${isSignup?'<div class="field"><label>Mobile number</label><input name="phone" type="tel" required pattern="[+0-9 ()-]{10,18}" placeholder="0300 0000000" autocomplete="tel"></div>':''}<div class="field ${isSignup?'':'wide'}"><label>Password</label><input name="password" type="password" required minlength="6" maxlength="30" placeholder="Min 6 characters" autocomplete="${isSignup?'new-password':'current-password'}"></div>${isSignup?'<div class="field"><label>Confirm password</label><input name="confirm" type="password" required minlength="6" placeholder="Repeat password" autocomplete="new-password"></div>':''}</div>${isSignup?'<label class="check"><input type="checkbox" required><span>I agree to APEX terms and privacy.</span></label>':''}<button class="btn full" style="margin-top:14px">${isSignup?'Create account ↗':'Sign in ↗'}</button></form><div class="auth-switch">${isSignup?'Already have an account?':'New to APEX?'} <button class="text-btn" onclick="auth(${!isSignup},'${next}')">${isSignup?'Sign in':'Create account'}</button></div></div>`);
 }
 
-function submitAuth(e,signup,next){
-  e.preventDefault();
-  const f=Object.fromEntries(new FormData(e.target));
-  const errorEl=document.getElementById('auth-error');
-  const showErr=m=>{if(errorEl)errorEl.innerHTML=`<div class="auth-error">${esc(m)}</div>`;};
-  users=read('users',[]);
-  if(signup){
-    if(f.password!==f.confirm)return showErr('Passwords do not match.');
-    if(users.some(u=>u.username.toLowerCase()===f.username.trim().toLowerCase()))return showErr('Username already taken. Choose another.');
-    if(users.some(u=>u.email.toLowerCase()===f.email.trim().toLowerCase()))return showErr('Email already registered. Please sign in.');
-    if(f.password.length<6)return showErr('Password must be at least 6 characters.');
-    const u={id:'C'+Date.now(),name:f.name.trim(),username:f.username.trim(),email:f.email.trim().toLowerCase(),phone:f.phone.trim(),password:f.password};
-    users.push(u);write('users',users);
-    account=u;write('session',u);
-    closeModal();go('home');render();toast('Welcome, '+u.name.split(' ')[0]+'!');
-  }else{
-    const identifier=f.username.trim().toLowerCase();
-    const u=users.find(x=>x.username.toLowerCase()===identifier||x.email.toLowerCase()===identifier);
-    if(!u)return showErr('No account found with that username or email.');
-    if(u.password!==f.password)return showErr('Incorrect password. Try again.');
-    account=u;write('session',u);
-    closeModal();go('home');render();toast('Welcome back, '+u.name.split(' ')[0]+'!');
-  }
-}
-
 function checkoutPage(){if(!cart.length)return empty('Your selection is empty.','Add a vehicle before booking.');if(!account)return `<div class="wrap empty"><h2>Sign in to continue</h2><p>Create your APEX account to book.</p><button class="btn" onclick="auth(true,'checkout')">Create account</button></div>`;return `<div class="wrap"><div class="page-top"><a class="back" href="#cart">← Your selection</a><h1>Complete your booking.</h1></div><div class="steps"><span class="${checkoutStep===1?'active':''}"><b>1</b> Renter details</span><span class="${checkoutStep===2?'active':''}"><b>2</b> Review & payment</span></div><div class="checkout-layout"><section class="panel depth-layer">${checkoutStep===1?renterForm():paymentForm()}</section><aside class="panel reservation depth-layer"><h3 class="formtitle">Your selection</h3>${cart.map(i=>`<div style="display:flex;gap:12px;margin-bottom:18px"><img src="${getCarMainPhoto(carBy(i.carId))}" style="width:65px;height:49px;border-radius:5px;object-fit:cover" alt=""><div><b class="small">${esc(carBy(i.carId).name)}</b><p class="file-note" style="margin:4px 0">${duration(i.start,i.end)} days · ${i.service}</p></div></div>`).join('')}${priceLines(totals())}</aside></div><div style="height:60px"></div></div>`}
 function renterForm(){return `<h2 class="formtitle">Renter details</h2><div class="notice"></div><form id="renter-form" onsubmit="reviewCheckout(event)"><div class="formgrid"><div class="field"><label>Full legal name</label><input name="name" required value="${esc(checkoutInfo.name||account.name)}" minlength="2"></div><div class="field"><label>Phone number</label><input name="phone" type="tel" required value="${esc(checkoutInfo.phone||account.phone)}"></div><div class="field"><label>Email address</label><input type="email" required name="email" value="${esc(account.email)}"></div><div class="field"><label>Date of birth (18+)</label><input type="date" name="dob" required max="${v3AgeCutoff(18)}" value="${esc(checkoutInfo.dob||'')}"></div><div class="field"><label>Identity document</label><select name="idType" onchange="updateID(this.value)"><option>CNIC</option><option>Passport</option></select></div><div class="field"><label id="identity-label">CNIC number · 13 digits</label><input id="identity-number" name="identity" required pattern="[0-9]{13}" placeholder="0000000000000"></div><div class="field wide"><label>Current address</label><input name="address" required minlength="8" value="${esc(checkoutInfo.address||'')}"></div><div class="field"><label>Emergency contact name</label><input name="emergencyName" required minlength="2" value="${esc(checkoutInfo.emergencyName||'')}"></div><div class="field"><label>Emergency contact phone</label><input name="emergencyPhone" type="tel" required value="${esc(checkoutInfo.emergencyPhone||'')}"></div><div class="field wide"><label>Trip purpose / Destination</label><input name="destination" required value="${esc(checkoutInfo.destination||'')}"></div><div class="field wide"><label>Pick-up mode</label><select name="pickupMode" onchange="toggleHomeDelivery(this.value)"><option value="Office pickup">Office pickup — ${esc(config.officeAddress)}</option><option value="Home delivery">Home delivery — +${money(config.homeDeliveryCharge)} car at your home</option></select></div><div class="field wide" id="home-delivery-field" style="display:none"><label>Home delivery full address</label><input name="homeAddress" placeholder="House #, Street, Area, City" value="${esc(checkoutInfo.homeAddress||'')}"></div></div>${cart.map((i,n)=>i.service==='Self-drive'?`<div class="detail-section" style="margin-top:25px"><h3 style="font-size:17px">Driver ${n+1} · ${esc(carBy(i.carId).name)}</h3><div class="formgrid"><div class="field"><label>Driver full name</label><input name="driverName_${n}" required></div><div class="field"><label>Driver DOB · 25+</label><input name="driverDOB_${n}" type="date" required max="${v3AgeCutoff(25)}"></div><div class="field"><label>Licence number</label><input name="license_${n}" required></div><div class="field"><label>Licence expiry</label><input name="expiry_${n}" type="date" required min="${i.end}"></div></div></div>`:'').join('')}<label class="check"><input type="checkbox" required name="terms"><span>I accept rental & cancellation terms.</span></label><div class="button-row"><button class="btn" type="submit">Review & pay ↗</button></div></form>`}
 function toggleHomeDelivery(v){const el=document.getElementById('home-delivery-field'); if(el) el.style.display=v==='Home delivery'?'block':'none';}
@@ -774,7 +761,7 @@ function contact(){
 function modal(title,body,large=false){document.getElementById('overlay').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()"><section class="modal ${large?'large':''}" role="dialog" aria-modal="true"><div class="modal-head"><h2>${title}</h2><button class="close" onclick="closeModal()">×</button></div>${body}</section></div>`;document.body.style.overflow='hidden'}
 function closeModal(){document.getElementById('overlay').innerHTML='';document.body.style.overflow='';if(window.__v3ManualDocs)window.__v3ManualDocs={}}
 function download(name,text,type='text/csv'){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function adminLoginPage(){return `<div class="admin-login-wrap"><div class="panel admin-login depth-layer"><div class="eyebrow">APEX OPERATIONS</div><h1>Admin login</h1><p class="small muted">Sign in to manage APEX.</p><form onsubmit="submitAdminLogin(event)"><div class="formgrid"><div class="field wide"><label>Username</label><input name="user" required autocomplete="username" value="admin"></div><div class="field wide"><label>Password</label><input name="pass" type="password" required autocomplete="current-password"></div></div><button class="btn full" style="margin-top:14px">Sign in to operations ↗</button></form></div></div>`}
+function adminLoginPage(){return `<div class="admin-login-wrap"><div class="panel admin-login depth-layer"><div class="eyebrow">APEX OPERATIONS</div><h1>Admin login</h1><p class="small muted">Sign in to manage APEX.</p><form onsubmit="submitAdminLogin(event)"><div class="formgrid"><div class="field wide"><label>Username</label><input name="user" required autocomplete="username" value="${esc(read('adminLoginName','admin'))}"></div><div class="field wide"><label>Password</label><input name="pass" type="password" required autocomplete="current-password"></div></div><button class="btn full" style="margin-top:14px">Sign in to operations ↗</button></form></div></div>`}
 async function submitAdminLogin(e){
   e.preventDefault();
   const f=Object.fromEntries(new FormData(e.target));
@@ -782,10 +769,12 @@ async function submitAdminLogin(e){
   try{
     const d=await v3Api('/api/auth/login',{method:'POST',body:JSON.stringify({username:f.user,password:f.pass})});
     if(!d||d.role!=='admin'){toast('Invalid credentials.');return;}
-    __apexToken=d.token;write('apiToken',__apexToken);
+    __apexToken=d.token;__apexRole='admin';write('apiToken',__apexToken);
+    write('adminLoginName',d.user?.username||f.user.trim());
     adminSession={user:'admin',at:new Date().toISOString()};
     adminTab='Payments';
-    account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
+    account={id:'admin',name:d.user?.name||'Administrator',username:d.user?.username||f.user.trim(),
+      email:d.user?.email||'admin@apex.local',phone:d.user?.phone||''};
     persist();render();
     toast('Admin signed in — website + operations accessible');
     v3RefreshBootstrap();
@@ -860,8 +849,54 @@ async function viewApplicationPhotos(id){
   }catch(err){const box=document.getElementById('application-photos');if(box)box.textContent='Photos unavailable: '+err.message;}
 }
 function updateApplication(e,id){e.preventDefault();const data=Object.fromEntries(new FormData(e.target));const app=applications.find(a=>a.id===id);Object.assign(app,data); if(data.status==='Approved for onboarding'){ if(!app.cnic){closeModal();toast('Approval blocked — owner CNIC missing (full verification required)');return;} if(bannedCNICs.includes(app.cnic)){closeModal();toast('Approval blocked — this CNIC is banned');return;} if((app.verification||'Pending')!=='Verified'){closeModal();toast('Approval blocked — mark documents Verified first');return;} } if(data.status==='Approved for onboarding' && !fleet.some(c=>c.ownerId===app.userId && c.name.includes(app.brand))){const newId=Math.max(...fleet.map(c=>c.id))+100;const newCar={id:newId,name:app.brand+' '+app.model,brand:app.brand,category:'Sedan',origin:'Pakistan',image:'pk-city',year:+app.year,rate:+app.rate||7000,deposit:35000,seats:5,engine:'1.5L',power:'100 hp',fuel:'Petrol',km:(app.mileage||0)+' km',color:'White',plate:app.registration||'LHR-xxx',condition:app.condition||'Very good',status:'Active',features:['Partner vehicle'],marketNote:'Partner vehicle',ownerId:app.userId,ownerShare:0.90,companyShare:0.10,customImage:null,customImages:{}};fleet.push(newCar);} persist();closeModal();render();toast('Application updated');addNotification(app.userId,'Application '+data.status,'Your vehicle application '+id+' is '+data.status,'application/'+id)}
-function adminSettings(){return `<form class="panel depth-layer" style="max-width:700px" onsubmit="saveAdminSettings(event)"><h2 class="formtitle">Settings</h2><div class="formgrid"><div class="field"><label>Driver rate PKR/day</label><input name="driverRate" type="number" required value="${config.driverRate}"></div><div class="field"><label>Overtime PKR/hour</label><input name="overtime" type="number" required value="${config.overtime}"></div></div><button class="btn" style="margin-top:14px">Save settings</button><div style="margin-top:24px"><button type="button" class="btn ghost" onclick="resetFleet()">Reset fleet</button></div></form>`}
+function adminSettings(){return `<div style="max-width:700px">
+  <form class="panel depth-layer" onsubmit="saveAdminSettings(event)"><h2 class="formtitle">Settings</h2><div class="formgrid"><div class="field"><label>Driver rate PKR/day</label><input name="driverRate" type="number" required value="${config.driverRate}"></div><div class="field"><label>Overtime PKR/hour</label><input name="overtime" type="number" required value="${config.overtime}"></div></div><button class="btn" style="margin-top:14px">Save settings</button><div style="margin-top:24px"><button type="button" class="btn ghost" onclick="resetFleet()">Reset fleet</button></div></form>
+  <form class="panel depth-layer" style="margin-top:20px" onsubmit="saveAdminCredentials(event)">
+    <div class="eyebrow">ACCOUNT SECURITY</div><h2 class="formtitle">Admin login details</h2>
+    <p class="small muted" style="margin-bottom:18px">Change your sign-in username or password. Your current password is required; other admin sessions will be signed out.</p>
+    <div class="formgrid">
+      <div class="field wide"><label for="admin-login-name">Admin username</label><input id="admin-login-name" name="username" value="${esc(account?.username||read('adminLoginName','admin'))}" required minlength="3" maxlength="30" pattern="[A-Za-z0-9_.-]{3,30}" autocomplete="username"></div>
+      <div class="field wide"><label for="admin-current-password">Current password *</label><input id="admin-current-password" name="currentPassword" type="password" required autocomplete="current-password"></div>
+      <div class="field"><label for="admin-new-password">New password (optional)</label><input id="admin-new-password" name="newPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="At least 12 characters"></div>
+      <div class="field"><label for="admin-confirm-password">Confirm new password</label><input id="admin-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" placeholder="Repeat new password"></div>
+    </div>
+    <p class="file-note" style="margin-top:12px">Leave the new password blank to change only the username. Passwords are saved as salted one-way hashes, never shown here.</p>
+    <p id="admin-credentials-result" class="small" role="status" aria-live="polite" style="margin-top:12px"></p>
+    <button class="btn" type="submit" style="margin-top:12px">Save login details</button>
+  </form></div>`}
 function saveAdminSettings(e){e.preventDefault();const f=Object.fromEntries(new FormData(e.target));config={driverRate:+f.driverRate,overtime:+f.overtime};write('config',config);toast('Settings saved')}
+async function saveAdminCredentials(e){
+  e.preventDefault();
+  const form=e.target,f=Object.fromEntries(new FormData(form));
+  const message=form.querySelector('#admin-credentials-result');
+  const showError=text=>{if(message){message.textContent=text;message.style.color='#b3261e'}};
+  const username=(f.username||'').trim(),currentPassword=f.currentPassword||'',newPassword=f.newPassword||'';
+  if(!isAdminAuthenticated()||__apexRole!=='admin'||!__apexToken||!v3Online())
+    return showError('Sign in as admin on the running server to edit login details.');
+  if(!/^[A-Za-z0-9_.-]{3,30}$/.test(username))return showError('Enter a valid username (3–30 letters, numbers, . _ -).');
+  if(!currentPassword)return showError('Enter your current password.');
+  if(newPassword!==String(f.confirmPassword||''))return showError('New passwords do not match.');
+  if(newPassword&&newPassword.length<12)return showError('New password must have at least 12 characters.');
+  const button=form.querySelector('button[type="submit"]');
+  if(button){button.disabled=true;button.textContent='Saving securely…'}
+  try{
+    const updated=await v3Api('/api/admin/credentials',{method:'PUT',body:JSON.stringify({username,currentPassword,newPassword})});
+    if(!updated?.token||updated.role!=='admin'||!updated.user?.username)throw new Error('Could not verify the updated admin session.');
+    __apexToken=updated.token;__apexRole='admin';write('apiToken',__apexToken);
+    write('adminLoginName',updated.user.username);
+    account={...account,id:'admin',name:updated.user.name||'Administrator',username:updated.user.username,
+      email:updated.user.email||'admin@apex.local',phone:updated.user.phone||''};
+    write('session',account);
+    users=users.map(u=>withoutCachedPassword(u?.id===updated.user.id?{...u,...updated.user}:u));
+    write('users',users);
+    form.elements.currentPassword.value='';form.elements.newPassword.value='';form.elements.confirmPassword.value='';
+    await v3RefreshBootstrap();
+    const status=document.getElementById('admin-credentials-result');
+    if(status){status.textContent='Admin login updated. Other sessions were signed out.';status.style.color='var(--ink)'}
+    toast('Admin login details updated');
+  }catch(err){showError(err.message||'Could not update admin login details.');}
+  finally{if(button){button.disabled=false;button.textContent='Save login details'}}
+}
 function resetFleet(){if(confirm('Reset fleet to 13 defaults?')){fleet=defaultFleet;write('fleet',fleet);render();toast('Fleet reset')}}
 function exportOrders(){const rows=[['Booking','Customer','Email','Status','Cars','Rental','Method'],...orders.map(o=>[o.id,o.name,o.email,o.status,o.items.map(i=>carBy(i.carId)?.name||'Deleted').join(' / '),o.totals.rental,o.payment])];download('APEX-reservations.csv',rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n'));toast('Exported')}
 function seedDemo(){if(orders.some(o=>o.id==='VR-DEMO01'))return toast('Sample already loaded');const samples=[{id:'VR-DEMO01',name:'Hassan Ali',email:'hassan@example.com',carId:4,service:'With driver',city:'Lahore',start:'2026-10-01',end:'2026-10-04',payment:'JazzCash'},{id:'VR-DEMO02',name:'Sara Ahmed',email:'sara@example.com',carId:7,service:'Self-drive',city:'Islamabad',start:'2026-10-06',end:'2026-10-08',payment:'Cash on pickup'}];samples.forEach(s=>{const item={carId:s.carId,start:s.start,end:s.end,city:s.city,service:s.service,driverRate:config.driverRate};const t=totals([item]);orders.push({id:s.id,userId:s.id+'-customer',name:s.name,email:s.email,phone:'03000000000',destination:s.city,identityType:'CNIC',identityMasked:'xxxxx',identityStatus:'Verified',items:[{...item,price:quote(item)}],totals:t,payment:s.payment,status:'Confirmed',paid:0,depositPaid:0,created:new Date().toISOString()})});persist();render();toast('Sample loaded')}
@@ -932,7 +967,7 @@ const __apexMergeKeys=new Set(['users','orders','applications','notifications','
 let __apexBaseline={};
 let __apexSending=false;
 let __apexPushT=null;
-function apexSyncState(){return {fleet,drivers,users,orders,applications,notifications,chats,config};}
+function apexSyncState(){return {fleet,drivers,users:users.map(withoutCachedPassword),orders,applications,notifications,chats,config};}
 function apexPendingKeys(){const keys=read('apexPendingSyncKeys',[]);return Array.isArray(keys)?keys.filter(k=>__apexSyncKeys.includes(k)):[];}
 function apexRememberPending(keys){write('apexPendingSyncKeys',[...new Set([...apexPendingKeys(),...keys])]);}
 function apexChangedKeys(){const state=apexSyncState();return __apexSyncKeys.filter(k=>JSON.stringify(state[k])!==__apexBaseline[k]);}
@@ -1179,7 +1214,9 @@ async function submitAuth(e,signup,next){
       if(res.role==='admin'){
         __apexServerReady=false;
         adminSession={user:'admin',at:new Date().toISOString()};
-        account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
+        write('adminLoginName',res.user?.username||f.username.trim());
+        account={id:'admin',name:res.user?.name||'Administrator',username:res.user?.username||f.username.trim(),
+          email:res.user?.email||'admin@apex.local',phone:res.user?.phone||''};
         persist();closeModal();toast('Admin signed in');
         if(!isAdmin){location.href='admin.html#Overview';return;}
         goAdminTab('Overview');v3RefreshBootstrap();return;
@@ -1202,21 +1239,8 @@ async function submitAuth(e,signup,next){
       return;
     }
   }
-  /* offline (file://) fallback — original local behaviour */
-  users=read('users',[]);
-  if(signup){
-    if(users.some(u=>u.username.toLowerCase()===f.username.trim().toLowerCase()))return showErr('Username already taken.');
-    if(users.some(u=>u.email.toLowerCase()===f.email.trim().toLowerCase()))return showErr('Email already registered.');
-    const u={id:'C'+Date.now(),name:f.name.trim(),username:f.username.trim(),email:f.email.trim().toLowerCase(),phone:f.phone.trim(),password:f.password};
-    users.push(u);write('users',users);account=u;write('session',u);
-    closeModal();go('home');render();toast('Welcome, '+u.name.split(' ')[0]+'!');
-  }else{
-    const identifier=f.username.trim().toLowerCase();
-    const u=users.find(x=>x.username.toLowerCase()===identifier||x.email.toLowerCase()===identifier);
-    if(!u)return showErr('No account found with that username or email.');
-    if(u.password!==f.password)return showErr('Incorrect password. Try again.');
-    account=u;write('session',u);closeModal();go('home');render();toast('Welcome back, '+u.name.split(' ')[0]+'!');
-  }
+  // file:// cannot use the Java database; never save plaintext passwords to localStorage.
+  return showErr('Sign-in needs the local Java server. Open the ZIP with RUN.bat first.');
 }
 async function submitAdminLogin(e){
   e.preventDefault();
@@ -1228,7 +1252,9 @@ async function submitAdminLogin(e){
     __apexToken=d.token;__apexRole='admin';write('apiToken',__apexToken);
     __apexServerReady=false;
     adminSession={user:'admin',at:new Date().toISOString()};
-    account={id:'admin',name:'Administrator',username:'admin',email:'admin@apex.local',phone:'03000000000'};
+    write('adminLoginName',d.user?.username||f.user.trim());
+    account={id:'admin',name:d.user?.name||'Administrator',username:d.user?.username||f.user.trim(),
+      email:d.user?.email||'admin@apex.local',phone:d.user?.phone||''};
     persist();goAdminTab('Overview');render();
     toast('Signed in to operations');
     v3RefreshBootstrap();
@@ -1240,7 +1266,9 @@ function apexAdminLogin(u,p){
   if(!v3Online())return;
   fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})})
     .then(r=>r.ok?r.json():null).then(d=>{
-      if(d&&d.token){__apexToken=d.token;write('apiToken',__apexToken);v3RefreshBootstrap();}
+      if(d&&d.token){__apexToken=d.token;write('apiToken',__apexToken);
+        if(d.role==='admin')write('adminLoginName',d.user?.username||u);
+        v3RefreshBootstrap();}
     }).catch(()=>{});
 }
 /* Server-authoritative union: this browser's rows win per id (newest local
@@ -1327,7 +1355,7 @@ async function apexPushNow(){
 function apexAssignSyncKey(key,value){
   switch(key){
     case 'fleet':fleet=value;break;case 'drivers':drivers=value;break;
-    case 'users':users=value;break;case 'orders':orders=value;break;
+    case 'users':users=value.map(withoutCachedPassword);break;case 'orders':orders=value;break;
     case 'applications':applications=value;break;case 'notifications':notifications=value;break;
     case 'chats':chats=value;break;
     case 'config':config=value;break;
@@ -1352,8 +1380,9 @@ function v3RefreshBootstrap(){
     __apexRole=me.role;
     if(adminPage&&me.role!=='admin'){const e=new Error('Admin access required');e.status=403;throw e}
     if(me.role==='admin'){
-      account={id:'admin',name:me.user?.name||'Administrator',username:'admin',
+      account={id:'admin',name:me.user?.name||'Administrator',username:me.user?.username||me.username||'admin',
         email:me.user?.email||'admin@apex.local',phone:me.user?.phone||''};
+      write('adminLoginName',account.username);
       write('session',account);
     }else if(me.user?.id){account=me.user;write('session',account)}
   }):adminPage?Promise.reject(Object.assign(new Error('Admin sign-in required'),{status:401})):Promise.resolve();

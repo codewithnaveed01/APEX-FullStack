@@ -44,6 +44,10 @@ public final class SessionRepo {
         c.query("DELETE FROM sessions WHERE token = $1", new String[]{token});
     }
 
+    public void deleteAllForUser(PgConnection c, String userId) {
+        c.query("DELETE FROM sessions WHERE user_id = $1", new String[]{userId});
+    }
+
     public void purgeExpired(PgConnection c) {
         c.query("DELETE FROM sessions WHERE expires_at <= now()", null);
     }

@@ -11,6 +11,7 @@ import com.google.gson.JsonObject;
 import org.mindrot.jbcrypt.BCrypt;
 
 import java.security.SecureRandom;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
@@ -99,6 +100,48 @@ public final class AuthService {
     private static final class QueryResultDup {
         final boolean usernameTaken, emailTaken;
         QueryResultDup(boolean u, boolean e) { usernameTaken = u; emailTaken = e; }
+    }
+
+    /**
+     * Admin-only credential rotation. Requires the current password, updates
+     * username and/or BCrypt hash atomically, then invalidates ALL previous
+     * sessions and returns a fresh one for the caller.
+     */
+    public JsonObject changeAdminCredentials(String userId, String username,
+                                             String currentPassword, String newPassword) {
+        String name = Validation.required(username, "username", 3, 30);
+        if (!name.matches("^[A-Za-z0-9_.-]+$")) {
+            throw ApiException.validation("Username may only contain letters, numbers, . _ -");
+        }
+        if (currentPassword == null || currentPassword.isEmpty()) {
+            throw ApiException.validation("Current password is required");
+        }
+        String next = newPassword == null ? "" : newPassword;
+        if (!next.isEmpty() && (next.length() < 12 || next.length() > 128 ||
+                next.getBytes(StandardCharsets.UTF_8).length > 72)) {
+            throw ApiException.validation("New admin password must be at least 12 characters and at most 72 UTF-8 bytes");
+        }
+        return db.tx(c -> {
+            User admin = users.getForUpdate(c, userId);
+            if (admin == null || !admin.isAdmin()) throw ApiException.forbidden("Admin access required");
+            boolean valid;
+            try {
+                valid = admin.passwordHash != null && BCrypt.checkpw(currentPassword, admin.passwordHash);
+            } catch (IllegalArgumentException badHash) {
+                valid = false;
+            }
+            if (!valid) throw ApiException.unauth("Current password is incorrect");
+            if (name.equals(admin.username) && next.isEmpty()) {
+                throw ApiException.validation("Enter a new username or password");
+            }
+            if (users.loginNameTaken(c, admin.id, name)) {
+                throw ApiException.conflict("Username is already used by another account");
+            }
+            String hash = next.isEmpty() ? admin.passwordHash : BCrypt.hashpw(next, BCrypt.gensalt(12));
+            User updated = users.updateAdminCredentials(c, admin.id, name, hash);
+            sessions.deleteAllForUser(c, admin.id);
+            return issue(c, updated);
+        });
     }
 
     /** Issues a session on the CALLER's connection (never borrows a second one). */

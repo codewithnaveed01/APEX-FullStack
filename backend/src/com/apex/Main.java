@@ -61,9 +61,10 @@ public final class Main {
         StaticHandler statics = new StaticHandler(cfg.staticDir);
         AdminController admin = new AdminController(app);
 
+        String bindHost = System.getenv().getOrDefault("APEX_BIND_HOST", "0.0.0.0");
         HttpServer server;
         try {
-            server = HttpServer.create(new InetSocketAddress("0.0.0.0", cfg.port), 128);
+            server = HttpServer.create(new InetSocketAddress(bindHost, cfg.port), 128);
         } catch (IOException e) {
             Logger.error("Cannot bind port {}: {}", cfg.port, e.getMessage());
             System.exit(1);
@@ -94,7 +95,7 @@ public final class Main {
         });
         server.setExecutor(Executors.newFixedThreadPool(32));
         server.start();
-        Logger.info("APEX ready in {} ms - http://0.0.0.0:{} (frontend: {})",
-                System.currentTimeMillis() - t0, cfg.port, cfg.staticDir);
+        Logger.info("APEX ready in {} ms - http://{}:{} (frontend: {})",
+                System.currentTimeMillis() - t0, bindHost, cfg.port, cfg.staticDir);
     }
 }
