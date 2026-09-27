@@ -6,9 +6,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const script = fs.readFileSync(path.join(__dirname, '../../frontend/customer.js'), 'utf8');
-const start = script.indexOf('function adminSettings(){');
+const start = script.indexOf('function adminCredentialsPanel(){');
 const end = script.indexOf('function resetFleet(){', start);
-assert.ok(start >= 0 && end > start);
+const activeSettings = script.indexOf('function adminSettings(){', end);
+const settingsEnd = script.indexOf('function saveAdminSettings(e){', activeSettings);
+assert.ok(start >= 0 && end > start && activeSettings > end && settingsEnd > activeSettings);
+// Regression: a second function declaration later in the page silently
+// replaced the credential form, even though its isolated test passed.
+assert.equal((script.match(/function adminSettings\(\)\{/g) || []).length, 1);
 const storage = new Map(), calls = [], toasts = [];
 const message = {textContent:'',style:{}}, button = {disabled:false,textContent:'Save login details'};
 const input = () => ({value:'something'});
@@ -18,7 +23,9 @@ class FormData {
 }
 const context = vm.createContext({
   FormData, console,
-  config: {driverRate:4500,overtime:500},
+  config: {driverRate:4500,overtime:500,graceMinutes:30,capExtraAtDaily:'true',
+    homeDeliveryCharge:1500,companyPhone:'03001234567'},
+  v3Grace:()=>30,v3Cap:()=>true,
   account: {id:'admin',username:'admin',name:'APEX Admin'},
   users: [{id:'UADMIN',username:'admin',role:'admin',password:'old-browser-cache'}],
   __apexToken:'old-token',__apexRole:'admin',
@@ -40,14 +47,18 @@ const context = vm.createContext({
     return {token:'fresh-token',role:'admin',user:{id:'UADMIN',username:'new-chief',name:'APEX Admin',email:'admin@apex.local'}};
   }
 });
-vm.runInContext(script.slice(start,end), context);
+vm.runInContext(script.slice(start,end)+'\n'+script.slice(activeSettings,settingsEnd), context);
 const form = values => ({values, elements:{currentPassword:input(),newPassword:input(),confirmPassword:input()},
   querySelector: selector => selector==='button[type="submit"]'?button:message});
 const event = target => ({preventDefault(){},target});
 
 (async () => {
   const markup=context.adminSettings();
+  assert.match(markup, /Settings — pricing & late-return policy/);
+  assert.match(markup, /name="graceMinutes"/);
+  assert.match(markup, /name="capExtraAtDaily"/);
   assert.match(markup, /Admin login details/);
+  assert.equal((markup.match(/<form\b/g)||[]).length,2,'pricing and credentials must be separate forms');
   assert.match(markup, /name="username"[^>]*value="admin"/);
   assert.match(markup, /name="currentPassword"[^>]*type="password"[^>]*required/);
   assert.match(markup, /name="newPassword"[^>]*type="password"/);

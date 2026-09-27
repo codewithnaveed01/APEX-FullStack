@@ -74,6 +74,14 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(JSON.parse(p.storage.get('v2_users')).length, 1);
   assert.equal(JSON.parse(p.storage.get('v2_fleet')).length, seed.fleet.length);
 
+  // Exercise the real page, not an isolated early function declaration: the
+  // later Settings override once hid the credential editor entirely.
+  vm.runInContext("adminTab='Settings';render()", p.context);
+  const settingsHtml=p.elements.get('app').innerHTML;
+  assert.match(settingsHtml,/Settings — pricing & late-return policy/);
+  assert.match(settingsHtml,/Admin login details/);
+  assert.match(settingsHtml,/name="currentPassword"[^>]*required/);
+
   // A settings edit sends ONLY config; stale users/other collections are not
   // included in the payload, and a successful save clears the pending marker.
   await vm.runInContext('config.driverRate=7300;persist();apexPushNow()', p.context);
