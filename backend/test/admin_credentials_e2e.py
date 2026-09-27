@@ -5,6 +5,7 @@ Requires APEX_TEST_ALLOW_ADMIN_ROTATION=disposable-local-db and
 APEX_TEST_BASE=http://127.0.0.1:<port>. Run once with 'initial' and again
 with 'restart' after restarting the backend on the same disposable database.
 """
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -125,14 +126,23 @@ elif MODE == "restart":
     data = expect(200, "GET", "/api/bootstrap", token=admin["token"])
     no_passwords(data)
     assert sum(user.get("role") == "admin" for user in data["users"]) == 1
-    # Password-only change leaves the renamed username alone and revokes old sessions.
-    password_only = expect(200, "PUT", CRED_PATH, {"username": state["new_name"],
-        "currentPassword": NEW_PASSWORD, "newPassword": SECOND_PASSWORD}, admin["token"])
+    # Competing logins must never mint an old-password session that survives
+    # rotation. The login row lock is held until the new session is committed.
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        old_logins = [pool.submit(req, "POST", "/api/auth/login", {
+            "username": state["new_name"], "password": NEW_PASSWORD}) for _ in range(6)]
+        password_only = expect(200, "PUT", CRED_PATH, {"username": state["new_name"],
+            "currentPassword": NEW_PASSWORD, "newPassword": SECOND_PASSWORD}, admin["token"])
+        old_results = [future.result() for future in old_logins]
     assert password_only["username"] == state["new_name"]
     expect(401, "GET", "/api/auth/me", token=admin["token"])
+    for status, result in old_results:
+        assert status in (200, 401), f"unexpected old-password login: {status} {result}"
+        if status == 200:
+            expect(401, "GET", "/api/auth/me", token=result["token"])
     expect(401, "POST", "/api/auth/login", {"username": state["new_name"], "password": NEW_PASSWORD})
     assert login(state["new_name"], SECOND_PASSWORD)["role"] == "admin"
     no_passwords(password_only)
-    print("PASS: both username-only and password-only changes, restarts, legacy plaintext/JSON migration, one admin, customer logins")
+    print("PASS: both username-only and password-only changes, concurrent logins revoked, restarts, legacy plaintext/JSON migration, one admin, customer logins")
 else:
     raise ValueError("usage: admin_credentials_e2e.py [initial|restart]")

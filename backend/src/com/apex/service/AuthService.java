@@ -40,8 +40,11 @@ public final class AuthService {
         String idn = Json.clean(identifier);
         String pw = password == null ? "" : password;
         if (idn.isEmpty() || pw.isEmpty()) return null;
-        return db.with(c -> {
-            User u = users.findByLogin(c, idn);
+        // Keep the row lock through verification AND session creation. A
+        // concurrent password change then either revokes this session or the
+        // login sees the new hash; an old password cannot mint a late session.
+        return db.tx(c -> {
+            User u = users.findByLoginForUpdate(c, idn);
             if (u == null) return null;
             if (u.passwordHash == null || u.passwordHash.isEmpty() || !BCrypt.checkpw(pw, u.passwordHash)) {
                 return null;

@@ -74,9 +74,19 @@ public final class UserRepo {
     }
 
     public User findByLogin(PgConnection c, String identifier) {
+        return lookupByLogin(c, identifier, false);
+    }
+
+    /** Use inside a transaction so credential rotation cannot race a login. */
+    public User findByLoginForUpdate(PgConnection c, String identifier) {
+        return lookupByLogin(c, identifier, true);
+    }
+
+    private User lookupByLogin(PgConnection c, String identifier, boolean lock) {
         String idn = Json.clean(identifier).toLowerCase();
-        QueryResult r = c.query("SELECT " + COLS + " FROM users WHERE lower(username) = $1 OR lower(email) = $1",
-                new String[]{idn});
+        QueryResult r = c.query("SELECT " + COLS +
+                " FROM users WHERE lower(username) = $1 OR lower(email) = $1" +
+                (lock ? " FOR UPDATE" : ""), new String[]{idn});
         return r.rowCount() > 0 ? User.fromRow(r, 0) : null;
     }
 
