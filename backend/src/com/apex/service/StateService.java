@@ -185,7 +185,7 @@ public final class StateService {
                 int n = 0;
                 for (JsonElement el : arr(state, "users")) {
                     if (!el.isJsonObject()) continue;
-                    users.upsertFromSync(c, el.getAsJsonObject(), Json.getStr(el.getAsJsonObject(), "password", ""));
+                    users.upsertFromSync(c, el.getAsJsonObject());
                     n++;
                 }
                 counts[2] = n;

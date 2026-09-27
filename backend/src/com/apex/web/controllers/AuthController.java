@@ -35,6 +35,15 @@ public final class AuthController {
             HttpUtil.sendJson(ctx.ex, 200, o);
         });
 
+        r.put("/api/admin/credentials", Router.Level.ADMIN, ctx -> {
+            JsonObject updated = app.auth.changeAdminCredentials(
+                    Json.getStr(ctx.session, "userId", ""),
+                    Json.getStr(ctx.body, "username", ""),
+                    Json.getStr(ctx.body, "currentPassword", ""),
+                    Json.getStr(ctx.body, "newPassword", ""));
+            HttpUtil.sendJson(ctx.ex, 200, updated);
+        });
+
         r.get("/api/auth/me", Router.Level.ANY, ctx -> {
             JsonObject me = ctx.session;
             JsonObject o = new JsonObject();

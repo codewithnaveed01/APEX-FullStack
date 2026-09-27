@@ -3,22 +3,14 @@ package com.apex.db;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.EOFException;
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
-import javax.crypto.Mac;
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.PBEKeySpec;
-import javax.crypto.spec.SecretKeySpec;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
@@ -148,79 +140,91 @@ public final class PgConnection implements AutoCloseable {
     }
 
     private void authenticate(String password) throws Exception {
+        // SCRAM state belongs to this connection, never to a static/shared field:
+        // the pool may establish connections concurrently for different requests.
+        String[] scramState = null;
+        String expectedServerSignature = null;
         for (int guard = 0; guard < 20; guard++) {
-            int code = readAuth();
-            switch (code) {
+            AuthMessage msg = readAuth();
+            switch (msg.code) {
                 case 0:  // AuthenticationOk
                     return;
                 case 3:  // cleartext password
                     sendPassword(password);
                     break;
-                case 5:  // md5
-                    byte[] salt = new byte[4];
-                    in.readFully(salt);
-                    sendPassword("md5" + md5Hex(md5Hex(password + user) + new String(salt, StandardCharsets.UTF_8)));
+                case 5: { // md5: the 4-byte salt is binary, NOT UTF-8 text
+                    if (msg.data.length != 4) throw new PgException("08006", "Invalid MD5 salt");
+                    byte[] inner = md5Hex((password + user).getBytes(StandardCharsets.UTF_8))
+                            .getBytes(StandardCharsets.US_ASCII);
+                    byte[] salted = new byte[inner.length + msg.data.length];
+                    System.arraycopy(inner, 0, salted, 0, inner.length);
+                    System.arraycopy(msg.data, 0, salted, inner.length, msg.data.length);
+                    sendPassword("md5" + md5Hex(salted));
                     break;
-                case 10: { // SASL - start
-                    String mechs = readCString();
-                    if (!mechs.contains("SCRAM-SHA-256")) {
-                        throw new PgException("28000", "Server does not offer SCRAM-SHA-256: " + mechs);
+                }
+                case 10: { // AuthenticationSASL: NUL-separated mechanism names
+                    String mechs = "\0" + new String(msg.data, StandardCharsets.UTF_8) + "\0";
+                    if (!mechs.contains("\0SCRAM-SHA-256\0")) {
+                        throw new PgException("28000", "Server does not offer SCRAM-SHA-256");
                     }
                     String nonce = Scram.randomNonce();
-                    String bare = "n=" + user + ",r=" + nonce;
-                    String clientFirst = "n,," + bare;
+                    String bare = "n=" + user.replace("=", "=3D").replace(",", "=2C") + ",r=" + nonce;
+                    byte[] first = ("n,," + bare).getBytes(StandardCharsets.UTF_8);
                     byte[] mech = "SCRAM-SHA-256\0".getBytes(StandardCharsets.UTF_8);
-                    byte[] first = clientFirst.getBytes(StandardCharsets.UTF_8);
                     out.writeByte('p');
                     out.writeInt(4 + mech.length + 4 + first.length);
                     out.write(mech);
                     out.writeInt(first.length);
                     out.write(first);
                     out.flush();
-                    // stash state for the next two SASL messages
-                    Scram.scramState = Scram.init(password, bare, nonce);
+                    scramState = Scram.init(password, bare, nonce);
                     break;
                 }
-                case 11: { // SASL continue
-                    byte[] data = readBytes();
-                    String[] r = Scram.step(new String(data, StandardCharsets.UTF_8));
+                case 11: { // AuthenticationSASLContinue: raw UTF-8, no length prefix
+                    if (scramState == null) throw new PgException("28000", "Unexpected SCRAM challenge");
+                    String[] r = Scram.step(new String(msg.data, StandardCharsets.UTF_8), scramState);
                     byte[] clientFinal = r[0].getBytes(StandardCharsets.UTF_8);
                     out.writeByte('p');
                     out.writeInt(4 + clientFinal.length);
                     out.write(clientFinal);
                     out.flush();
-                    Scram.scramExpectedServerSig = r[1];
+                    expectedServerSignature = r[1];
                     break;
                 }
-                case 12: { // SASL final
-                    byte[] data = readBytes();
-                    Scram.verifyFinal(new String(data, StandardCharsets.UTF_8), Scram.scramExpectedServerSig);
+                case 12: // AuthenticationSASLFinal
+                    if (expectedServerSignature == null) throw new PgException("28000", "Unexpected SCRAM reply");
+                    Scram.verifyFinal(new String(msg.data, StandardCharsets.UTF_8), expectedServerSignature);
                     break;
-                }
                 default:
-                    throw new PgException("28000", "Unsupported authentication code " + code);
+                    throw new PgException("28000", "Unsupported authentication code " + msg.code);
             }
         }
         throw new PgException("28000", "Authentication did not complete");
     }
 
-    private int readAuth() throws Exception {
-        int type = in.readUnsignedByte();
-        int len = in.readInt();
-        if (type == 'K') { // BackendKeyData - capture pid
-            pid = in.readInt();
-            in.readInt(); // secret key
-            return readAuth();
+    private static final class AuthMessage {
+        final int code;
+        final byte[] data;
+        AuthMessage(int code, byte[] data) { this.code = code; this.data = data; }
+    }
+
+    private AuthMessage readAuth() throws IOException {
+        for (int guard = 0; guard < 20; guard++) {
+            int type = in.readUnsignedByte();
+            int len = in.readInt();
+            if (len < 4 || len > 1_048_576) throw new IOException("Invalid PostgreSQL auth message length");
+            if (type == 'R') {
+                if (len < 8) throw new IOException("Truncated PostgreSQL auth message");
+                int code = in.readInt();
+                // Consume the WHOLE framed message, including SASL's final NUL;
+                // the next read must start on the next message boundary.
+                return new AuthMessage(code, readFixed(len - 8));
+            }
+            byte[] payload = readFixed(len - 4);
+            if (type == 'E') throw parseError(payload); // e.g. wrong password / missing DB
+            // ParameterStatus, Notice and BackendKeyData may precede auth.
         }
-        if (type != 'R') {
-            // parameter status / notice / warning / ready-for-query interleaved
-            skipPayload(len);
-            return readAuth();
-        }
-        // The code is the only fixed part of the Authentication payload;
-        // the rest (salt / mechanisms / SASL data) is consumed by the
-        // caller of readAuth() for the codes that carry it.
-        return in.readInt();
+        throw new IOException("Too many PostgreSQL startup messages");
     }
 
     private void sendPassword(String pw) throws IOException {
@@ -261,6 +265,7 @@ public final class PgConnection implements AutoCloseable {
         } catch (PgException e) {
             throw e;
         } catch (Exception e) {
+            healthy = false; // an interrupted response must not be reused by the pool
             throw new PgException("08006", "Query failed: " + rootMessage(e));
         }
     }
@@ -342,8 +347,8 @@ public final class PgConnection implements AutoCloseable {
                     skipRestOfMessage(len - 4 - (tag.length() + 1));
                     break;
                 }
-                case 'E': { // ErrorResponse - remember, then drain until Ready
-                    PgException e = readError();
+                case 'E': { // ErrorResponse - drain through ReadyForQuery before throwing
+                    PgException e = parseError(readFixed(len - 4));
                     if (firstError == null) firstError = e;
                     break;
                 }
@@ -381,20 +386,22 @@ public final class PgConnection implements AutoCloseable {
         throw new PgException("08006", "Query did not complete: " + shortSql(sql));
     }
 
-    private PgException readError() throws IOException {
+    private static PgException parseError(byte[] payload) {
         String code = "XX000", message = "unknown error", severity = "ERROR";
-        while (true) {
-            int field = in.readUnsignedByte();
-            if (field == 0) break;
-            String val = readCString();
+        for (int i = 0; i < payload.length && payload[i] != 0; ) {
+            int field = payload[i++];
+            int end = i;
+            while (end < payload.length && payload[end] != 0) end++;
+            String val = new String(payload, i, end - i, StandardCharsets.UTF_8);
             switch (field) {
                 case 'C': code = val; break;
                 case 'M': message = val; break;
                 case 'S': severity = val; break;
                 default: break;
             }
+            i = end + 1;
         }
-        throw new PgException(code, "[" + severity + "] " + message);
+        return new PgException(code, "[" + severity + "] " + message);
     }
 
     public boolean ping() {
@@ -417,10 +424,8 @@ public final class PgConnection implements AutoCloseable {
         if (closed) return;
         closed = true;
         try {
-            byte[] q = ("DISCONNECT\0").getBytes(StandardCharsets.UTF_8);
-            out.writeByte('X');
-            out.writeInt(4 + q.length);
-            out.write(q);
+            out.writeByte('X'); // Terminate has no payload
+            out.writeInt(4);
             out.flush();
         } catch (Exception ignored) { }
         hardClose();
@@ -436,13 +441,8 @@ public final class PgConnection implements AutoCloseable {
     private String readCString() throws IOException {
         ByteArrayOutputStream b = new ByteArrayOutputStream();
         int c;
-        while ((c = in.read()) != 0) b.write(c);
+        while ((c = in.readUnsignedByte()) != 0) b.write(c);
         return new String(b.toByteArray(), StandardCharsets.UTF_8);
-    }
-
-    private byte[] readBytes() throws IOException {
-        int len = in.readInt();
-        return readFixed(len);
     }
 
     private byte[] readFixed(int len) throws IOException {
@@ -475,13 +475,12 @@ public final class PgConnection implements AutoCloseable {
         return c.getMessage() == null ? c.toString() : c.getMessage();
     }
 
-    private static String md5Hex(String s) {
+    private static String md5Hex(byte[] data) {
         try {
-            MessageDigest md = MessageDigest.getInstance("MD5");
-            byte[] d = md.digest(s.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            for (byte x : d) sb.append(String.format("%02x", x));
-            return sb.toString();
+            byte[] digest = MessageDigest.getInstance("MD5").digest(data);
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) hex.append(String.format("%02x", b & 0xff));
+            return hex.toString();
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }

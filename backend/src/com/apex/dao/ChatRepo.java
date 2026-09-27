@@ -59,9 +59,9 @@ public final class ChatRepo {
                 r[4] == null ? 0 : Integer.parseInt(r[4]), msgs);
     }
 
-    /** Upsert thread meta + insert messages (deduped) + update unread counters. */
-    public void merge(PgConnection c, String userId, String userName, String lastTimeIso,
-                      List<String[]> messages) {
+    /** Upsert thread meta + insert messages (deduped) + update unread counters. Returns inserted count. */
+    public int merge(PgConnection c, String userId, String userName, String lastTimeIso,
+                     List<String[]> messages) {
         c.query("INSERT INTO chat_threads(user_id, user_name, last_time)" +
                 " VALUES ($1,$2,NULLIF($3,'')::timestamptz)" +
                 " ON CONFLICT (user_id) DO UPDATE SET" +
@@ -70,7 +70,7 @@ public final class ChatRepo {
                 " last_time = COALESCE(EXCLUDED.last_time, chat_threads.last_time)," +
                 " updated_at = now()",
                 new String[]{userId, Json.clean(userName), Json.clean(lastTimeIso)});
-        if (messages == null || messages.isEmpty()) return;
+        if (messages == null || messages.isEmpty()) return 0;
         int userAdded = 0, adminAdded = 0;
         for (String[] m : messages) {
             // m = {sender, body, timeIso}
@@ -93,6 +93,14 @@ public final class ChatRepo {
             c.query("UPDATE chat_threads SET unread_user = unread_user + $1, updated_at = now() WHERE user_id = $2",
                     new String[]{String.valueOf(adminAdded), userId});
         }
+        return userAdded + adminAdded;
+    }
+
+    /** Reset only the reader's unread counter; never clear the other side's. */
+    public ChatThread markRead(PgConnection c, String userId, boolean asAdmin) {
+        c.query("UPDATE chat_threads SET " + (asAdmin ? "unread_admin" : "unread_user") +
+                " = 0, updated_at = now() WHERE user_id = $1", new String[]{userId});
+        return threadFor(c, userId);
     }
 
     /** Admin marked the user's thread as read (from sync or read endpoint). */

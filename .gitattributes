@@ -1,0 +1,2 @@
+# Batch scripts use CRLF on Windows; normalize them in Git's index.
+*.bat text eol=crlf

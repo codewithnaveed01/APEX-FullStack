@@ -30,10 +30,11 @@ public final class NotificationRepo {
         return out;
     }
 
-    /** Own notifications plus the global "all" audience. */
+    /** Own notifications; legacy 'all' rows were admin alerts, not public broadcasts. */
     public List<JsonObject> listForUser(PgConnection c, String userId) {
         QueryResult r = c.query("SELECT id, user_id, title, msg, link, admin_tab, is_read, created_at" +
-                " FROM notifications WHERE user_id = $1 OR user_id = 'all' ORDER BY created_at DESC",
+                " FROM notifications WHERE user_id = $1 OR ($1 = 'admin' AND user_id = 'all')" +
+                " ORDER BY created_at DESC",
                 new String[]{userId});
         List<JsonObject> out = new ArrayList<>();
         for (int i = 0; i < r.rowCount(); i++) out.add(toJson(r, i));
@@ -41,9 +42,21 @@ public final class NotificationRepo {
     }
 
     public long unreadCount(PgConnection c, String userId) {
-        QueryResult r = c.query("SELECT count(*) FROM notifications WHERE (user_id = $1 OR user_id = 'all') AND is_read = FALSE",
+        QueryResult r = c.query("SELECT count(*) FROM notifications" +
+                " WHERE (user_id = $1 OR ($1 = 'admin' AND user_id = 'all')) AND is_read = FALSE",
                 new String[]{userId});
         return Long.parseLong(r.first());
+    }
+
+    public void markReadForUser(PgConnection c, String userId) {
+        c.query("UPDATE notifications SET is_read = TRUE" +
+                " WHERE (user_id = $1 OR ($1 = 'admin' AND user_id = 'all')) AND is_read = FALSE",
+                new String[]{userId});
+    }
+
+    public void clearForUser(PgConnection c, String userId) {
+        c.query("DELETE FROM notifications WHERE user_id = $1 OR ($1 = 'admin' AND user_id = 'all')",
+                new String[]{userId});
     }
 
     public void insert(PgConnection c, String id, String userId, String title, String msg,

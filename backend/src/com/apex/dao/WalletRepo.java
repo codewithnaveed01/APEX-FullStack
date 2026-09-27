@@ -41,6 +41,11 @@ public final class WalletRepo {
         return Long.parseLong(r.first());
     }
 
+    public long ownerBalance(PgConnection c, String ownerId) {
+        QueryResult r = c.query("SELECT balance FROM owner_wallets WHERE owner_id = $1", new String[]{ownerId});
+        return r.rowCount() > 0 && r.rows.get(0)[0] != null ? Long.parseLong(r.rows.get(0)[0]) : 0;
+    }
+
     public Map<String, Long> ownerWallets(PgConnection c) {
         Map<String, Long> m = new HashMap<>();
         QueryResult r = c.query("SELECT owner_id, balance FROM owner_wallets ORDER BY owner_id", null);
