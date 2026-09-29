@@ -31,12 +31,12 @@ jobs:
       APEX_PAYOUT_ENCRYPTION_KEY: ci-only-owner-payout-encryption-key
       PORT: 3030
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       - name: Compile backend and database tests
@@ -55,10 +55,36 @@ jobs:
           for i in {1..60}; do curl -fsS http://127.0.0.1:3030/health && exit 0; sleep 1; done
           cat /tmp/apex.log
           exit 1
-      - name: Backend end-to-end tests
+      - name: Existing backend end-to-end tests
+        id: existing-e2e
+        continue-on-error: true
         run: |
-          python3 backend/test/e2e_test.py
-          python3 backend/test/owner_vehicle_e2e.py
+          set +e
+          python3 backend/test/e2e_test.py 2>&1 | tee /tmp/existing-e2e.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            message=$(tail -n 100 /tmp/existing-e2e.log | sed -z 's/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=e2e_test.py failed::$message"
+          fi
+          exit "$code"
+      - name: Owner marketplace end-to-end tests
+        id: owner-e2e
+        if: always() && steps.existing-e2e.outcome != 'cancelled'
+        continue-on-error: true
+        run: |
+          set +e
+          python3 backend/test/owner_vehicle_e2e.py 2>&1 | tee /tmp/owner-e2e.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            message=$(tail -n 100 /tmp/owner-e2e.log | sed -z 's/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=owner_vehicle_e2e.py failed::$message"
+          fi
+          exit "$code"
+      - name: Enforce end-to-end results
+        if: always()
+        run: |
+          test '${{ steps.existing-e2e.outcome }}' = success
+          test '${{ steps.owner-e2e.outcome }}' = success
       - name: Show application log on failure
         if: failure()
         run: cat /tmp/apex.log || true
