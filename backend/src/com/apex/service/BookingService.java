@@ -368,6 +368,9 @@ public final class BookingService {
             if (driverId != null && driverId > 0) {
                 Driver d = drivers.get(c, driverId);
                 if (d == null) throw ApiException.notFound("Driver not found");
+                if (!d.active || !("Approved".equalsIgnoreCase(d.status) || "Active".equalsIgnoreCase(d.status))) {
+                    throw ApiException.conflict("Driver must be approved and active before assignment");
+                }
                 JsonArray items = b.data.get("items") != null && b.data.getAsJsonArray("items") != null
                         ? b.data.getAsJsonArray("items") : new JsonArray();
                 for (JsonElement el : items) {

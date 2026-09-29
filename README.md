@@ -39,6 +39,8 @@ railway.json         legacy Railway config for existing services (new services: 
 - **`migrations/004_owner_vehicle_marketplace.sql`** — adds durable ordered owner-car
   image references, unique application-to-car links, approval/edit/deletion audit
   history, encrypted payout accounts and the idempotent 90/10 owner payout ledger.
+- **`migrations/005_approve_seed_drivers.sql`** — marks only the exact seven built-in
+  chauffeur records as approved; admin-created driver applications remain pending.
 
 Money is **always computed server-side** from `cars.rate` / `hourly_rate` / settings —
 client-sent prices are never trusted. Receipt upload → `Pending Verification`; only an
@@ -179,8 +181,8 @@ SELECT count(*) AS app_tables FROM information_schema.tables
 SELECT count(*) AS seeded_cars FROM public.cars;
 ```
 
-Expect migrations **`001_init.sql` through `004_owner_vehicle_marketplace.sql`**,
-**23 app tables**, and **13 seeded cars** on a new DB. If `schema_migrations` is
+Expect migrations **`001_init.sql` through `005_approve_seed_drivers.sql`**,
+**23 app tables**, **13 seeded cars**, and **7 approved seeded drivers** on a new DB. If `schema_migrations` is
 missing/empty or fewer tables appear, inspect the
 **app's** deploy logs: the DB reference may be missing/not deployed, point to a
 *different database*, or startup/migration may have failed. The app logs an

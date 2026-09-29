@@ -96,10 +96,17 @@ check("customer on admin endpoint 403", s == 403, f"{s}")
 
 print("== 3. Bootstrap ==")
 s, seeded_drivers = req("GET", "/api/drivers")
-check("seven seeded drivers at branch cities", s == 200 and
+check("seven approved seeded drivers at branch cities", s == 200 and
       [d.get("id") for d in seeded_drivers] == list(range(1, 8)) and
+      all(d.get("status") == "Approved" for d in seeded_drivers) and
       {d.get("city") for d in seeded_drivers} ==
       {"Lahore", "Islamabad", "Karachi", "Dera Ghazi Khan"}, f"{s} {seeded_drivers}")
+s, b = req("PUT", "/api/drivers/1", {"status": "Pending"}, token=admin)
+check("admin can mark driver pending", s == 200 and b.get("status") == "Pending", f"{s} {b}")
+s, b = req("PUT", "/api/drivers/1", {"status": "Approved", "active": True}, token=cust)
+check("customer cannot approve driver", s == 403, f"{s} {b}")
+s, b = req("PUT", "/api/drivers/1", {"status": "Approved", "active": True}, token=admin)
+check("admin approves pending driver", s == 200 and b.get("status") == "Approved" and b.get("active") is True, f"{s} {b}")
 s, b = req("GET", "/api/bootstrap")
 check("public bootstrap fleet", s == 200 and len(b.get("fleet", [])) == 13, f"{s} fleet={len(b.get('fleet', [])) if isinstance(b, dict) else b}")
 check("public bootstrap config", isinstance(b.get("config"), dict) and b["config"].get("driverRate", 0) > 0, f"{b.get('config') if isinstance(b, dict) else b}")
@@ -473,6 +480,8 @@ need = ["revenue", "walletBalance", "payPending", "payPendingAmount", "payVerifi
 check("stats all keys", s == 200 and all(k in st for k in need), f"missing={[k for k in need if k not in st]}")
 check("stats cars=14 (13+temp)", st.get("cars") == 14, f"cars={st.get('cars')}")
 check("stats users>=3", st.get("users", 0) >= 3, f"users={st.get('users')}")
+check("stats drivers show 7 approved and 0 pending", st.get("driversApproved") == 7 and st.get("driversPending") == 0,
+      f"approved={st.get('driversApproved')} pending={st.get('driversPending')}")
 check("stats completed>=2", st.get("completed", 0) >= 2, f"completed={st.get('completed')}")
 check("stats revenue>0", st.get("revenue", 0) > 0, f"revenue={st.get('revenue')}")
 check("stats docsPending==0 (verified)", st.get("docsPending") == 0, f"docsPending={st.get('docsPending')}")
