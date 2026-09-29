@@ -16,6 +16,7 @@ import com.google.gson.JsonObject;
  * Reviews:
  *  GET  /api/reviews              - admin (all)
  *  GET  /api/reviews/car/{id}     - public (approved only)
+ *  GET  /api/reviews/featured     - public (approved only, latest/top across all cars - homepage)
  *  POST /api/reviews              - any authenticated user, own COMPLETED booking only
  *  POST /api/reviews/{id}/review  - admin approve/hide
  *  DELETE /api/reviews/{id}       - admin hide
@@ -37,6 +38,17 @@ public final class ReviewController {
             long carId = idParam(ctx);
             JsonArray a = new JsonArray();
             for (JsonObject rev : app.reviews.approvedFor(carId)) a.add(rev);
+            HttpUtil.sendJson(ctx.ex, 200, a);
+        });
+
+        r.get("/api/reviews/featured", Router.Level.PUBLIC, ctx -> {
+            int limit = 9;
+            try {
+                String raw = ctx.query.get("limit");
+                if (raw != null && !raw.isBlank()) limit = Integer.parseInt(raw.trim());
+            } catch (NumberFormatException ignored) { /* fall back to default */ }
+            JsonArray a = new JsonArray();
+            for (JsonObject rev : app.reviews.approvedFeatured(limit)) a.add(rev);
             HttpUtil.sendJson(ctx.ex, 200, a);
         });
 
