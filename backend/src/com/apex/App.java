@@ -61,7 +61,7 @@ public final class App {
         uploadService = new UploadService(db, documents, cfg.uploadsDir);
         statsService = new StatsService(db, bookings, cars, drivers, users, payments, documents, reviews, wallet, apps, chats);
         stateService = new StateService(db, cars, drivers, users, bookings, apps, notifs, chats, bans, settings, wallet);
-        seedService = new SeedService(db, users, cars, drivers, settings, cfg);
+        seedService = new SeedService(db, users, cars, drivers, bookings, reviews, settings, cfg);
     }
 
     public void close() {

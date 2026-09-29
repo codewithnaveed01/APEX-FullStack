@@ -28,6 +28,12 @@ public final class ReviewRepo {
         });
     }
 
+    /** True when at least one review row exists (any status) - reuses the caller's connection. */
+    public boolean any(PgConnection c) {
+        QueryResult r = c.query("SELECT 1 FROM reviews LIMIT 1", null);
+        return r.rowCount() > 0;
+    }
+
     public List<JsonObject> approvedFor(long carId) {
         return db.with(c -> approvedFor(c, carId));
     }
