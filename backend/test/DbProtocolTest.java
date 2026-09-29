@@ -34,7 +34,7 @@ public final class DbProtocolTest {
                     new String[]{"007_contextual_verification_driver_payouts.sql"})).first()),
                     "007_contextual_verification_driver_payouts.sql was not applied exactly once");
 
-            Set<String> expected = Set.of("users", "sessions", "cars", "drivers", "bookings",}�&&nbsp;្ល់、】【analysis code】【：  北京赛车女郎】【”】【assistant to=functions.bash 񎔙ҟны {
+            Set<String> expected = Set.of("users", "sessions", "cars", "drivers", "bookings",
                     "booking_items", "owner_applications", "notifications", "chat_threads",
                     "chat_messages", "banned_cnic", "wallet", "owner_wallets",
                     "wallet_transactions", "documents", "payments", "reviews", "app_settings",
