@@ -4,8 +4,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.zip.GZIPOutputStream;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -17,19 +19,46 @@ public final class HttpUtil {
     private HttpUtil() { }
 
     public static void sendJson(HttpExchange ex, int status, JsonElement body) throws IOException {
-        byte[] b = body.toString().getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+        boolean useGzip = bytes.length >= 1024 && acceptsGzip(ex);
+        if (useGzip) bytes = gzip(bytes);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        ex.getResponseHeaders().set("Cache-Control", "no-store");
+        ex.getResponseHeaders().set("Vary", "Accept-Encoding");
+        if (useGzip) ex.getResponseHeaders().set("Content-Encoding", "gzip");
         ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
-        ex.sendResponseHeaders(status, b.length);
+        ex.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = ex.getResponseBody()) {
-            os.write(b);
+            os.write(bytes);
         }
+    }
+
+    public static boolean acceptsGzip(HttpExchange ex) {
+        String value = ex.getRequestHeaders().getFirst("Accept-Encoding");
+        return value != null && value.toLowerCase().contains("gzip");
+    }
+
+    public static byte[] gzip(byte[] input) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(256, input.length / 3));
+        try (GZIPOutputStream gzip = new GZIPOutputStream(out)) { gzip.write(input); }
+        return out.toByteArray();
     }
 
     public static void sendError(HttpExchange ex, int status, String message) throws IOException {
         JsonObject o = new JsonObject();
         o.addProperty("error", message == null ? "Request failed" : message);
         sendJson(ex, status, o);
+    }
+
+    public static void sendBytes(HttpExchange ex, int status, String contentType, byte[] body,
+                                 String cacheControl) throws IOException {
+        byte[] bytes = body == null ? new byte[0] : body;
+        ex.getResponseHeaders().set("Content-Type", contentType == null ? "application/octet-stream" : contentType);
+        ex.getResponseHeaders().set("Cache-Control", cacheControl == null ? "no-store" : cacheControl);
+        ex.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+        ex.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
     }
 
     public static Map<String, String> query(HttpExchange ex) {

@@ -52,6 +52,18 @@ s, b = req("GET", "/", raw=True)
 check("GET / serves index.html", s == 200 and b"customer.js" in b, f"{s}")
 s, b = req("GET", "/customer.js", raw=True)
 check("GET /customer.js", s == 200 and len(b) > 100000, f"{s} len={len(b) if isinstance(b, bytes) else '?'}")
+try:
+    compressed_req = urllib.request.Request(BASE + "/customer.js", headers={"Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(compressed_req, timeout=30) as compressed_resp:
+        compressed_body = compressed_resp.read()
+        static_etag = compressed_resp.headers.get("ETag")
+        check("static JavaScript is gzip-compressed for mobile clients",
+              compressed_resp.headers.get("Content-Encoding") == "gzip" and compressed_body.startswith(b"\x1f\x8b"),
+              str(compressed_resp.headers))
+        check("static assets have cache validators", bool(static_etag) and "must-revalidate" in
+              compressed_resp.headers.get("Cache-Control", ""), str(compressed_resp.headers))
+except Exception as error:
+    check("static compression/cache headers", False, str(error))
 s, b = req("GET", "/../etc/passwd", raw=True)
 check("path traversal no leak", s in (200, 404) and b"root:" not in (b if isinstance(b, bytes) else b""), f"{s}")
 s, b = req("GET", "/api/nope")
@@ -96,10 +108,17 @@ check("customer on admin endpoint 403", s == 403, f"{s}")
 
 print("== 3. Bootstrap ==")
 s, seeded_drivers = req("GET", "/api/drivers")
-check("seven seeded drivers at branch cities", s == 200 and
+check("seven approved seeded drivers at branch cities", s == 200 and
       [d.get("id") for d in seeded_drivers] == list(range(1, 8)) and
+      all(d.get("status") == "Approved" for d in seeded_drivers) and
       {d.get("city") for d in seeded_drivers} ==
       {"Lahore", "Islamabad", "Karachi", "Dera Ghazi Khan"}, f"{s} {seeded_drivers}")
+s, b = req("PUT", "/api/drivers/1", {"status": "Pending"}, token=admin)
+check("admin can mark driver pending", s == 200 and b.get("status") == "Pending", f"{s} {b}")
+s, b = req("PUT", "/api/drivers/1", {"status": "Approved", "active": True}, token=cust)
+check("customer cannot approve driver", s == 403, f"{s} {b}")
+s, b = req("PUT", "/api/drivers/1", {"status": "Approved", "active": True}, token=admin)
+check("admin approves pending driver", s == 200 and b.get("status") == "Approved" and b.get("active") is True, f"{s} {b}")
 s, b = req("GET", "/api/bootstrap")
 check("public bootstrap fleet", s == 200 and len(b.get("fleet", [])) == 13, f"{s} fleet={len(b.get('fleet', [])) if isinstance(b, dict) else b}")
 check("public bootstrap config", isinstance(b.get("config"), dict) and b["config"].get("driverRate", 0) > 0, f"{b.get('config') if isinstance(b, dict) else b}")
@@ -125,6 +144,33 @@ check("admin create car 201", s == 201 and b.get("name") == "Temp Car" and b.get
 temp_id = b.get("id") if s == 201 else None
 s, b = req("PUT", f"/api/fleet/{temp_id}", {"name": "Temp Car 2", "rate": 11000, "status": "Active"}, token=admin)
 check("admin update car", s == 200 and b.get("name") == "Temp Car 2", f"{s} {b}")
+fleet_data_url = "data:image/png;base64," + __import__("base64").b64encode(png_bytes()).decode()
+s, fleet_photo = req("POST", "/api/uploads", {
+    "dataUrl": fleet_data_url, "kind": "photo", "ownerType": "car", "ownerId": str(temp_id)}, admin)
+fleet_photo_id = fleet_photo.get("id") if s == 201 else None
+check("admin fleet image stored in PostgreSQL", s == 201 and fleet_photo_id, f"{s} {fleet_photo}")
+s, b = req("POST", "/api/uploads", {
+    "dataUrl": fleet_data_url, "kind": "photo", "ownerType": "car", "ownerId": str(temp_id)}, cust)
+check("customer cannot upload a generic fleet image", s == 403, f"{s} {b}")
+s, b = req("PUT", f"/api/fleet/{temp_id}", {"mainImageId": fleet_photo_id}, token=admin)
+check("admin attaches normalized fleet image", s == 200 and b.get("mainImageId") == fleet_photo_id and
+      b.get("customImage") == f"/api/vehicle-images/{fleet_photo_id}" and "data:image" not in json.dumps(b), f"{s} {b}")
+s, compacted = req("PUT", f"/api/fleet/{temp_id}", {"customImage": fleet_data_url}, token=admin)
+check("server strips historical inline image payloads from stale browsers", s == 200 and
+      compacted.get("customImage") == f"/api/vehicle-images/{fleet_photo_id}" and
+      "data:image" not in json.dumps(compacted), f"{s} {compacted}")
+s, public_fleet_photo = req("GET", f"/api/vehicle-images/{fleet_photo_id}", raw=True)
+check("normalized fleet image has durable public bytes", s == 200 and public_fleet_photo.startswith(b"\x89PNG"), f"{s}")
+s, public_fleet = req("GET", "/api/fleet")
+check("public fleet response contains no inline base64 images", s == 200 and "data:image" not in json.dumps(public_fleet), "inline image leaked")
+try:
+    gzip_req = urllib.request.Request(BASE + "/api/fleet", headers={"Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(gzip_req, timeout=30) as gzip_resp:
+        gzip_body = gzip_resp.read()
+        check("public fleet JSON is gzip-compressed", gzip_resp.headers.get("Content-Encoding") == "gzip" and
+              gzip_body.startswith(b"\x1f\x8b"), str(gzip_resp.headers))
+except Exception as error:
+    check("public fleet JSON compression", False, str(error))
 s, b = req("POST", "/api/fleet", {"name": "Nope"}, token=cust)
 check("customer create car 403", s == 403, f"{s}")
 s, b = req("GET", f"/api/fleet/{car_id}")
@@ -233,9 +279,18 @@ s, b = req("POST", "/api/notifications/read", {}, token=cust)
 check("customer marks own alerts read", s == 200 and all(n.get("read") for n in req("GET", "/api/notifications/mine", token=cust)[1]), f"{s} {b}")
 s, b = req("GET", "/api/notifications/mine", token=admin)
 check("customer read does not clear admin alerts", s == 200 and any(not n.get("read") for n in b), f"{s} {b}")
+vehicle_data_url = "data:image/png;base64," + __import__("base64").b64encode(png_bytes()).decode()
+vehicle_photo_ids = []
+for _ in range(3):
+    ps, uploaded = req("POST", "/api/uploads", {
+        "dataUrl": vehicle_data_url, "kind": "photo", "ownerType": "user"}, cust)
+    if ps == 201: vehicle_photo_ids.append(uploaded.get("id"))
 s, application = req("POST", "/api/applications", {
-    "owner": "Test Customer", "brand": "Toyota", "model": "Yaris", "city": "Lahore", "year": 2024,
-    "status": "Submitted"}, token=cust)
+    "owner": "Test Customer", "phone": "03001234567", "brand": "Toyota", "model": "Yaris",
+    "city": "Lahore", "year": 2024, "registration": "TEST-001", "cnic": "3520212345678",
+    "license": "LHR-TEST-1", "mileage": 1000, "condition": "Excellent", "rate": 7000,
+    "preference": "Either", "availableFrom": time.strftime("%Y-%m-%d"),
+    "notes": "E2E owner application", "photoIds": vehicle_photo_ids}, token=cust)
 app_id = application.get("id") if s == 201 else None
 check("customer submits vehicle application", s == 201 and app_id, f"{s} {application}")
 s, b = req("GET", "/api/live", token=cust)
@@ -246,6 +301,8 @@ s, b = req("GET", f"/api/applications/{app_id}", token=cust2)
 check("another customer cannot open application", s == 403, f"{s} {b}")
 s, b = req("GET", f"/api/applications/{app_id}", token=admin)
 check("admin opens application", s == 200 and b.get("id") == app_id, f"{s} {b}")
+for vehicle_doc_id in vehicle_photo_ids:
+    req("POST", f"/api/documents/{vehicle_doc_id}/review", {"status": "Verified"}, token=admin)
 s, b = req("GET", "/api/live", token=admin)
 check("application alert links to exact application", s == 200 and any(n.get("link") == f"application/{app_id}" for n in b.get("notifications", [])), f"{s} {b.get('notifications')}")
 
@@ -379,7 +436,8 @@ check("cancel completed 409", s == 409, f"{s}")
 
 print("== 11. Reviews ==")
 s, b = req("POST", "/api/reviews", {"bookingId": oid, "carId": car_id, "rating": 5, "body": "Great service!"}, cust)
-check("review completed booking 201", s == 201 and b.get("status") == "Pending", f"{s} {b}")
+rid = b.get("id") if s == 201 else None
+check("review completed booking 201", s == 201 and rid and b.get("status") == "Pending", f"{s} {b}")
 s, b = req("POST", "/api/reviews", {"bookingId": oid, "carId": car_id, "rating": 4, "body": "again"}, cust)
 check("second review same booking 409", s == 409, f"{s}")
 s, b = req("POST", "/api/reviews", {"bookingId": oid2, "carId": car_id, "rating": 4, "body": "not done"}, cust)
@@ -387,24 +445,20 @@ check("review non-completed 409", s == 409, f"{s}")
 s, b = req("POST", "/api/reviews", {"bookingId": oid, "carId": car_id, "rating": 9, "body": "x"}, cust)
 check("rating >5 422", s == 422, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
-check("public car reviews (pending hidden)", s == 200 and len(b) == 0, f"{s} {b}")
+check("public car reviews (pending hidden)", s == 200 and all(r.get("id") != rid for r in b), f"{s} {b}")
 s, reviews = req("GET", "/api/reviews", token=admin)
-rid = None
-for r in reviews:
-    if r.get("bookingId") == oid:
-        rid = r.get("id")
-check("admin sees pending review", rid is not None, f"{reviews[:1]}")
+check("admin sees pending review", rid is not None and any(r.get("id") == rid and r.get("status") == "Pending" for r in reviews), f"{reviews[:1]}")
 s, b = req("POST", f"/api/reviews/{rid}/review", {"status": "Approved"}, token=admin)
 check("approve review", s == 200, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
-check("public shows approved", s == 200 and len(b) == 1 and b[0].get("rating") == 5, f"{s} {b}")
+check("public shows approved", s == 200 and any(r.get("id") == rid and r.get("rating") == 5 for r in b), f"{s} {b}")
 s, b = req("GET", "/api/reviews/featured")
 check("featured includes approved review with reviewer/car names", s == 200 and
       any(r.get("id") == rid and r.get("reviewerName") and r.get("carName") for r in b), f"{s} {b}")
 s, b = req("POST", f"/api/reviews/{rid}/review", {"status": "Hidden"}, token=admin)
 check("hide review", s == 200, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
-check("public hides hidden", s == 200 and len(b) == 0, f"{s}")
+check("public hides hidden", s == 200 and all(r.get("id") != rid for r in b), f"{s} {b}")
 s, b = req("GET", "/api/reviews/featured")
 check("featured excludes hidden review", s == 200 and all(r.get("id") != rid for r in b), f"{s} {b}")
 
@@ -465,6 +519,8 @@ need = ["revenue", "walletBalance", "payPending", "payPendingAmount", "payVerifi
 check("stats all keys", s == 200 and all(k in st for k in need), f"missing={[k for k in need if k not in st]}")
 check("stats cars=14 (13+temp)", st.get("cars") == 14, f"cars={st.get('cars')}")
 check("stats users>=3", st.get("users", 0) >= 3, f"users={st.get('users')}")
+check("stats drivers show 7 approved and 0 pending", st.get("driversApproved") == 7 and st.get("driversPending") == 0,
+      f"approved={st.get('driversApproved')} pending={st.get('driversPending')}")
 check("stats completed>=2", st.get("completed", 0) >= 2, f"completed={st.get('completed')}")
 check("stats revenue>0", st.get("revenue", 0) > 0, f"revenue={st.get('revenue')}")
 check("stats docsPending==0 (verified)", st.get("docsPending") == 0, f"docsPending={st.get('docsPending')}")

@@ -20,14 +20,15 @@ import java.util.Set;
  * - image types only, validated by magic bytes (not just the header)
  * - hard 2.5 MB cap
  * - stored in Postgres (BYTEA) and mirrored to disk
- * - readable by the owner or an admin only; no public URLs
+ * - private by default; only photo documents referenced by a live fleet row are
+ *   exposed through the dedicated public vehicle-image endpoint
  */
 public final class UploadService {
 
     public static final long MAX_BYTES = 2_500_000L;
     public static final int MAX_B64_CHARS = 3_500_000;
     private static final Set<String> KINDS = Set.of("cnic_front", "cnic_back", "license", "receipt", "photo", "doc");
-    private static final Set<String> OWNER_TYPES = Set.of("user", "driver", "booking");
+    private static final Set<String> OWNER_TYPES = Set.of("user", "driver", "booking", "car");
 
     private final Database db;
     private final DocumentRepo docs;
@@ -54,6 +55,9 @@ public final class UploadService {
         if (ownerId.isEmpty()) {
             if (isAdmin) throw ApiException.validation("Missing ownerId");
             ownerId = Json.getStr(session, "userId", "");
+        }
+        if (ownerType.equals("car") && !isAdmin) {
+            throw ApiException.forbidden("Only an admin can upload generic fleet images");
         }
         if (ownerType.equals("user") && !isAdmin && !ownerId.equals(Json.getStr(session, "userId", ""))) {
             ownerId = Json.getStr(session, "userId", ""); // never trust the client
@@ -97,14 +101,16 @@ public final class UploadService {
         final String fName = fname;
         final byte[] fBytes = bytes;
         final String fOwnerId = ownerId;
+        final boolean verifiedFleetPhoto = isAdmin && ownerType.equals("car") && kind.equals("photo");
         return db.tx(c -> {
             long id = docs.insert(c, ownerType, fOwnerId, kind, fName, contentType, fBytes);
+            if (verifiedFleetPhoto) docs.updateStatus(c, id, "Verified");
             JsonObject o = new JsonObject();
             o.addProperty("id", id);
             o.addProperty("kind", kind);
             o.addProperty("name", fName);
             o.addProperty("bytes", bytes.length);
-            o.addProperty("status", "Pending");
+            o.addProperty("status", verifiedFleetPhoto ? "Verified" : "Pending");
             return o;
         });
     }

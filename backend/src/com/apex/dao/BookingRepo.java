@@ -60,6 +60,11 @@ public final class BookingRepo {
 
     /** Insert or update the booking row + its items (items are replaced). */
     public void upsert(PgConnection c, Booking b) {
+        // Lifecycle services mutate the JSON document. Rebuild the normalized
+        // projection so status, payment and settlement columns cannot lag behind
+        // the JSON returned to the browser.
+        Booking projected = Booking.fromJson(b.data);
+        if (projected != null) b = projected;
         if (b.id.isEmpty()) throw com.apex.web.ApiException.bad("Booking id is required");
         JsonArray items = b.data.get("items") != null && b.data.getAsJsonArray("items") != null
                 ? b.data.getAsJsonArray("items") : new JsonArray();

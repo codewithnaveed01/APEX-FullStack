@@ -36,6 +36,14 @@ railway.json         legacy Railway config for existing services (new services: 
 - **`migrations/003_align_default_driver_branches.sql`** — aligns only untouched seed
   drivers with Lahore, Islamabad, Karachi and Dera Ghazi Khan; admin-edited drivers
   and the seven-driver total are preserved.
+- **`migrations/004_owner_vehicle_marketplace.sql`** — adds durable ordered owner-car
+  image references, unique application-to-car links, approval/edit/deletion audit
+  history, encrypted payout accounts and the idempotent 90/10 owner payout ledger.
+- **`migrations/005_approve_seed_drivers.sql`** — marks only the exact seven built-in
+  chauffeur records as approved; admin-created driver applications remain pending.
+- **`migrations/006_externalize_legacy_fleet_images.sql`** — migrates historical
+  inline/base64 fleet photos into PostgreSQL document bytes and replaces the
+  multi-megabyte public payloads with compact image references.
 
 Money is **always computed server-side** from `cars.rate` / `hourly_rate` / settings —
 client-sent prices are never trusted. Receipt upload → `Pending Verification`; only an
@@ -103,6 +111,7 @@ docker compose up --build
 ```bash
 # With the app running at localhost:3030 (e.g. via Docker Compose):
 python3 backend/test/e2e_test.py
+python3 backend/test/owner_vehicle_e2e.py  # disposable DB: owner images/approval/edit/delete/payout
 # Optional, with Node installed: frontend checks (no server needed)
 node backend/test/frontend_sync_test.js
 node backend/test/frontend_date_test.js
@@ -175,8 +184,9 @@ SELECT count(*) AS app_tables FROM information_schema.tables
 SELECT count(*) AS seeded_cars FROM public.cars;
 ```
 
-Expect **`001_init.sql`**, **18 app tables**, and **13 cars** on a new DB. If
-`schema_migrations` is missing/empty or fewer tables appear, inspect the
+Expect migrations **`001_init.sql` through `006_externalize_legacy_fleet_images.sql`**,
+**23 app tables**, **13 seeded cars**, and **7 approved seeded drivers** on a new DB. If `schema_migrations` is
+missing/empty or fewer tables appear, inspect the
 **app's** deploy logs: the DB reference may be missing/not deployed, point to a
 *different database*, or startup/migration may have failed. The app logs an
 actionable error when no DB variable is set on Railway. Do not delete or
@@ -208,7 +218,14 @@ file). The root Dockerfile is detected independently of `railway.json`.
 
 Uploaded document bytes are stored in PostgreSQL (`BYTEA`) as the source of
 truth; the local `backend/uploads` directory is ephemeral unless a volume is
-attached. No MySQL is used.
+attached. Owner listings require exactly three ordered images (exterior,
+interior, detail/engine); approval publishes durable `/api/vehicle-images/{id}`
+references backed by those PostgreSQL bytes. Admin fleet photo edits use the same
+compact PostgreSQL-byte/public-reference model; API and static text responses are
+gzip-compressed, while HTML/JS/CSS use ETag revalidation so every device receives
+the current deployment without repeatedly downloading unchanged files. Owner payout
+account values are AES-256-GCM encrypted before storage. Set a stable `APEX_PAYOUT_ENCRYPTION_KEY`
+in Railway before collecting payout details. No MySQL is used.
 
 ## Configuration
 
@@ -223,6 +240,7 @@ All configuration is environment-based (see `backend/.env.example`):
 | `APEX_BIND_HOST` | optional bind address (local ZIP uses loopback; Docker/Railway default to all interfaces) | `0.0.0.0` |
 | `APEX_SESSION_HOURS` | session lifetime | `24` |
 | `APEX_DB_POOL` | connection pool size | `5` |
+| `APEX_PAYOUT_ENCRYPTION_KEY` | stable high-entropy AES-GCM key for owner payout details (set in Railway; never rotate without a data migration) | DB-credential-derived compatibility fallback |
 | `APEX_HOME` / `APEX_STATIC` / `APEX_UPLOADS` | paths | auto |
 
 ## API overview
@@ -231,6 +249,11 @@ All configuration is environment-based (see `backend/.env.example`):
 `GET /api/auth/me` · `PUT /api/admin/credentials` (admin; current password required) ·
 `GET /api/bootstrap` · `PUT /api/sync` (admin) ·
 `GET/POST/PUT/DELETE /api/fleet[/{id}]` · `GET /api/availability` ·
+`POST/GET/PUT /api/applications[/{id}]` (three images + approval workflow) ·
+`GET /api/vehicle-images/{id}` (approved fleet images only) ·
+`GET /api/owner/cars` · `PUT /api/owner/cars/{id}/edit` · `DELETE /api/owner/cars/{id}` ·
+`GET/PUT /api/owner/payout-account` · `GET /api/owner/wallet` ·
+`GET /api/admin/owners/{id}/payout-account` ·
 `POST /api/orders` + `GET/PUT/DELETE /api/orders/{id}` ·
 `POST /api/bookings/{id}/{pickup,return,cancel}` ·
 `POST /api/payments/{submit,record}` · `GET /api/payments` ·

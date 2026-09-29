@@ -3,6 +3,7 @@ package com.apex;
 import com.apex.config.AppConfig;
 import com.apex.dao.*;
 import com.apex.db.Database;
+import com.apex.security.PayoutCrypto;
 import com.apex.service.*;
 
 /** Application context: wires config, database, repositories and services. */
@@ -25,6 +26,7 @@ public final class App {
     public final PaymentRepo payments;
     public final DocumentRepo documents;
     public final ReviewRepo reviews;
+    public final OwnerRepo owners;
 
     public final AuthService auth;
     public final NotificationService notifications;
@@ -34,6 +36,7 @@ public final class App {
     public final StatsService statsService;
     public final StateService stateService;
     public final SeedService seedService;
+    public final OwnerVehicleService ownerVehicleService;
 
     public App(AppConfig cfg, Database db) {
         this.cfg = cfg;
@@ -53,6 +56,7 @@ public final class App {
         payments = new PaymentRepo(db);
         documents = new DocumentRepo(db);
         reviews = new ReviewRepo(db);
+        owners = new OwnerRepo(db, new PayoutCrypto(cfg.payoutEncryptionKey));
 
         auth = new AuthService(db, users, sessions, cfg.sessionHours);
         notifications = new NotificationService(notifs);
@@ -61,6 +65,7 @@ public final class App {
         uploadService = new UploadService(db, documents, cfg.uploadsDir);
         statsService = new StatsService(db, bookings, cars, drivers, users, payments, documents, reviews, wallet, apps, chats);
         stateService = new StateService(db, cars, drivers, users, bookings, apps, notifs, chats, bans, settings, wallet);
+        ownerVehicleService = new OwnerVehicleService(db, apps, cars, documents, bans, notifications, owners);
         seedService = new SeedService(db, users, cars, drivers, bookings, reviews, settings, cfg);
     }
 

@@ -10,8 +10,9 @@ import java.util.List;
 
 /**
  * Sensitive uploads (CNIC, licences, receipts, photos).
- * Bytes live in BYTEA (Postgres) and on disk; they are only ever
- * returned to the owner or an admin, never through public URLs.
+ * Bytes live in BYTEA (Postgres) and on disk. Documents stay private except
+ * vehicle photos currently referenced by a live fleet row, which have a
+ * narrowly scoped public byte endpoint.
  */
 public final class DocumentRepo {
 
@@ -65,6 +66,45 @@ public final class DocumentRepo {
     public boolean exists(PgConnection c, long id) {
         QueryResult r = c.query("SELECT 1 FROM documents WHERE id = $1", new String[]{String.valueOf(id)});
         return r.rowCount() > 0;
+    }
+
+    /** A vehicle photo may only be attached by the user who uploaded it. */
+    public boolean isOwnedVehiclePhoto(PgConnection c, long id, String ownerId) {
+        QueryResult r = c.query("SELECT 1 FROM documents WHERE id = $1 AND owner_type = 'user'" +
+                " AND owner_id = $2 AND kind = 'photo'", new String[]{String.valueOf(id), ownerId});
+        return r.rowCount() > 0;
+    }
+
+    public boolean vehiclePhotoAttachedElsewhere(PgConnection c, long id, String applicationId) {
+        QueryResult r = c.query("SELECT 1 FROM vehicle_application_images WHERE document_id = $1" +
+                " AND application_id <> $2", new String[]{String.valueOf(id), applicationId == null ? "" : applicationId});
+        return r.rowCount() > 0;
+    }
+
+    /** A generic fleet image must be an admin upload for this car or an existing owner-application image. */
+    public boolean isFleetPhoto(PgConnection c, long documentId, long carId, String applicationId) {
+        QueryResult r = c.query("SELECT 1 FROM documents d WHERE d.id=$1 AND d.kind='photo' AND (" +
+                " (d.owner_type='car' AND d.owner_id=$2) OR EXISTS (SELECT 1 FROM vehicle_application_images vi" +
+                " WHERE vi.document_id=d.id AND vi.application_id=$3)) LIMIT 1",
+                new String[]{String.valueOf(documentId), String.valueOf(carId),
+                        applicationId == null ? "" : applicationId});
+        return r.rowCount() > 0;
+    }
+
+    /** Public bytes are exposed only while this exact document is referenced by a live fleet row. */
+    public JsonObject publicVehicleImage(PgConnection c, long id) {
+        QueryResult r = c.query("SELECT d.content_type, d.content FROM documents d" +
+                " JOIN cars ca ON d.id IN (ca.main_image_id, ca.interior_image_id, ca.detail_image_id)" +
+                " WHERE d.id = $1 AND ca.status <> 'Deleted' AND (" +
+                " (d.owner_type='car' AND d.owner_id=ca.id::text) OR EXISTS (" +
+                " SELECT 1 FROM vehicle_application_images vi WHERE vi.document_id=d.id" +
+                " AND vi.application_id=ca.application_id)) LIMIT 1",
+                new String[]{String.valueOf(id)});
+        if (r.rowCount() == 0) return null;
+        JsonObject out = new JsonObject();
+        out.addProperty("contentType", r.rows.get(0)[0] == null ? "image/jpeg" : r.rows.get(0)[0]);
+        out.addProperty("hex", r.rows.get(0)[1] == null ? "" : r.rows.get(0)[1]);
+        return out;
     }
 
     public List<JsonObject> list() {

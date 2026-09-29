@@ -315,6 +315,7 @@ public final class BookingService {
                     "Your booking " + b.id + " has been received. " +
                     (cashPayment(fPayment) ? "Payment is due at pickup." : "Please upload your payment receipt."),
                     "booking/" + b.id, null);
+            notifyVehicleOwners(c, b, "Booked", true);
             return order;
         });
     }
@@ -367,6 +368,9 @@ public final class BookingService {
             if (driverId != null && driverId > 0) {
                 Driver d = drivers.get(c, driverId);
                 if (d == null) throw ApiException.notFound("Driver not found");
+                if (!d.active || !("Approved".equalsIgnoreCase(d.status) || "Active".equalsIgnoreCase(d.status))) {
+                    throw ApiException.conflict("Driver must be approved and active before assignment");
+                }
                 JsonArray items = b.data.get("items") != null && b.data.getAsJsonArray("items") != null
                         ? b.data.getAsJsonArray("items") : new JsonArray();
                 for (JsonElement el : items) {
@@ -378,6 +382,7 @@ public final class BookingService {
             bookings.upsert(c, b);
             notifs.notify(c, b.userId, "Vehicle picked up",
                     "Your booking " + b.id + " is now active. Enjoy the ride!", "booking/" + b.id, null);
+            notifyVehicleOwners(c, b, "Active", false);
             return b.data;
         });
     }
@@ -433,17 +438,25 @@ public final class BookingService {
                 if (ownerId.isEmpty()) continue;
                 long share = Math.round(rental * 0.90);
                 if (share <= 0) continue;
-                wallet.addOwner(c, ownerId, share);
-                wallet.addAdmin(c, -share);
-                wallet.ledger(c, "owner-payout", share, ownerId,
-                        "90% payout to owner " + ownerId + " for " +
-                                (car == null ? "car" : car.name) + " in booking " + b.id +
-                                " (company keeps 10%)");
-                notifs.notify(c, ownerId, "Payout released",
-                        "Ride completed for " + (car == null ? "your car" : car.name) +
-                                " - " + share + " PKR credited to your wallet (90% of " + rental + ").",
-                        "wallet", null);
+                long companyShare = rental - share;
+                String note = "90% payout to owner " + ownerId + " for " +
+                        (car == null ? "car" : car.name) + " in booking " + b.id +
+                        " (company keeps 10%)";
+                if (wallet.recordOwnerPayout(c, ownerId, b.id, Json.getLong(it, "carId", 0),
+                        car == null ? "" : car.name, car == null ? "" : car.applicationId,
+                        rental, companyShare, share, note)) {
+                    wallet.addOwner(c, ownerId, share);
+                    wallet.addAdmin(c, -share);
+                    wallet.ledger(c, "owner-payout", share, ownerId, note);
+                    notifs.notify(c, ownerId, "Payout completed",
+                            "Rental completed for " + (car == null ? "your car" : car.name) +
+                                    " · booking " + b.id + " · " + share +
+                                    " PKR credited (owner 90%, company 10%).",
+                            "wallet", null);
+                }
             }
+            b.data.addProperty("ownerPayoutDone", true);
+            bookings.upsert(c, b);
             if (late.charges > 0) {
                 wallet.ledger(c, "late-fee", late.charges, "",
                         "Late charges due from " + b.customerName + " for booking " + b.id +
@@ -461,6 +474,26 @@ public final class BookingService {
                     "booking/" + b.id, "Reservations");
             return b.data;
         });
+    }
+
+    private void notifyVehicleOwners(com.apex.db.PgConnection c, Booking booking,
+                                     String rentalStatus, boolean includeExpectedEarning) {
+        if (booking.data == null || !booking.data.has("items") || !booking.data.get("items").isJsonArray()) return;
+        for (JsonElement el : booking.data.getAsJsonArray("items")) {
+            if (!el.isJsonObject()) continue;
+            JsonObject item = el.getAsJsonObject();
+            Car car = cars.get(c, Json.getLong(item, "carId", 0));
+            if (car == null || car.ownerId == null || car.ownerId.isBlank()) continue;
+            JsonObject price = Json.obj(item, "price");
+            long rental = price == null ? 0 : Json.getLong(price, "rental", 0);
+            long expected = Math.round(rental * 0.90);
+            String message = "Car: " + car.name + " · Booking: " + booking.id +
+                    " · Rental status: " + rentalStatus +
+                    (includeExpectedEarning ? " · Expected earning: " + expected + " PKR (90%)." : ".");
+            notifs.notify(c, car.ownerId,
+                    includeExpectedEarning ? "Your car has been booked" : "Rental status updated",
+                    message, "booking/" + booking.id, null);
+        }
     }
 
     /* ---------------- helpers ---------------- */

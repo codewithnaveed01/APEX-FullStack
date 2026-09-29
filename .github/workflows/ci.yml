@@ -1,0 +1,90 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main, 'arena/**']
+  pull_request:
+
+jobs:
+  java-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: apex
+          POSTGRES_PASSWORD: apex
+          POSTGRES_DB: apex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U apex -d apex_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://apex:apex@127.0.0.1:5432/apex_test
+      APEX_HOME: ${{ github.workspace }}/backend
+      APEX_STATIC: ${{ github.workspace }}/frontend
+      APEX_ADMIN_USER: admin
+      APEX_ADMIN_PASS: admin1234
+      APEX_PAYOUT_ENCRYPTION_KEY: ci-only-owner-payout-encryption-key
+      PORT: 3030
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Compile backend and database tests
+        run: |
+          bash backend/build.sh
+          javac --release 17 -cp 'backend/out:backend/lib/*' -d backend/out \
+            backend/test/DbProtocolTest.java backend/test/DeploymentConfigTest.java
+      - name: Test migrations and PostgreSQL protocol
+        run: java -cp 'backend/out:backend/lib/*' com.apex.db.DbProtocolTest
+      - name: Frontend tests
+        run: for test in backend/test/frontend_*_test.js; do node "$test"; done
+      - name: Start application
+        run: |
+          java -cp 'backend/out:backend/lib/*' com.apex.Main > /tmp/apex.log 2>&1 &
+          echo $! > /tmp/apex.pid
+          for i in {1..60}; do curl -fsS http://127.0.0.1:3030/health && exit 0; sleep 1; done
+          cat /tmp/apex.log
+          exit 1
+      - name: Existing backend end-to-end tests
+        id: existing-e2e
+        continue-on-error: true
+        run: |
+          set +e
+          python3 backend/test/e2e_test.py 2>&1 | tee /tmp/existing-e2e.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            message=$(tail -n 100 /tmp/existing-e2e.log | sed -z 's/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=e2e_test.py failed::$message"
+          fi
+          exit "$code"
+      - name: Owner marketplace end-to-end tests
+        id: owner-e2e
+        if: always() && steps.existing-e2e.outcome != 'cancelled'
+        continue-on-error: true
+        run: |
+          set +e
+          python3 backend/test/owner_vehicle_e2e.py 2>&1 | tee /tmp/owner-e2e.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            message=$(tail -n 100 /tmp/owner-e2e.log | sed -z 's/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=owner_vehicle_e2e.py failed::$message"
+          fi
+          exit "$code"
+      - name: Enforce end-to-end results
+        if: always()
+        run: |
+          test '${{ steps.existing-e2e.outcome }}' = success
+          test '${{ steps.owner-e2e.outcome }}' = success
+      - name: Show application log on failure
+        if: failure()
+        run: cat /tmp/apex.log || true
