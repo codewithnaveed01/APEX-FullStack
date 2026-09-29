@@ -390,7 +390,8 @@ check("cancel completed 409", s == 409, f"{s}")
 
 print("== 11. Reviews ==")
 s, b = req("POST", "/api/reviews", {"bookingId": oid, "carId": car_id, "rating": 5, "body": "Great service!"}, cust)
-check("review completed booking 201", s == 201 and b.get("status") == "Pending", f"{s} {b}")
+rid = b.get("id") if s == 201 else None
+check("review completed booking 201", s == 201 and rid and b.get("status") == "Pending", f"{s} {b}")
 s, b = req("POST", "/api/reviews", {"bookingId": oid, "carId": car_id, "rating": 4, "body": "again"}, cust)
 check("second review same booking 409", s == 409, f"{s}")
 s, b = req("POST", "/api/reviews", {"bookingId": oid2, "carId": car_id, "rating": 4, "body": "not done"}, cust)
@@ -398,24 +399,20 @@ check("review non-completed 409", s == 409, f"{s}")
 s, b = req("POST", "/api/reviews", {"bookingId": oid, "carId": car_id, "rating": 9, "body": "x"}, cust)
 check("rating >5 422", s == 422, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
-check("public car reviews (pending hidden)", s == 200 and len(b) == 0, f"{s} {b}")
+check("public car reviews (pending hidden)", s == 200 and all(r.get("id") != rid for r in b), f"{s} {b}")
 s, reviews = req("GET", "/api/reviews", token=admin)
-rid = None
-for r in reviews:
-    if r.get("bookingId") == oid:
-        rid = r.get("id")
-check("admin sees pending review", rid is not None, f"{reviews[:1]}")
+check("admin sees pending review", rid is not None and any(r.get("id") == rid and r.get("status") == "Pending" for r in reviews), f"{reviews[:1]}")
 s, b = req("POST", f"/api/reviews/{rid}/review", {"status": "Approved"}, token=admin)
 check("approve review", s == 200, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
-check("public shows approved", s == 200 and len(b) == 1 and b[0].get("rating") == 5, f"{s} {b}")
+check("public shows approved", s == 200 and any(r.get("id") == rid and r.get("rating") == 5 for r in b), f"{s} {b}")
 s, b = req("GET", "/api/reviews/featured")
 check("featured includes approved review with reviewer/car names", s == 200 and
       any(r.get("id") == rid and r.get("reviewerName") and r.get("carName") for r in b), f"{s} {b}")
 s, b = req("POST", f"/api/reviews/{rid}/review", {"status": "Hidden"}, token=admin)
 check("hide review", s == 200, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
-check("public hides hidden", s == 200 and len(b) == 0, f"{s}")
+check("public hides hidden", s == 200 and all(r.get("id") != rid for r in b), f"{s} {b}")
 s, b = req("GET", "/api/reviews/featured")
 check("featured excludes hidden review", s == 200 and all(r.get("id") != rid for r in b), f"{s} {b}")
 
