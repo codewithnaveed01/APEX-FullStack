@@ -174,8 +174,8 @@ public final class OwnerVehicleService {
             if (body.has("photoIds")) applications.setImages(c, id, existing.userId, ids);
 
             if (APPROVED.equals(targetStatus)) {
-                if (!"Verified".equals(verification)) {
-                    throw ApiException.validation("Verify the application and all three vehicle images before approval");
+                if (!"Verified".equals(verification) || !allPersistedPhotosVerified(c, existing.id, existing.userId, ids)) {
+                    throw ApiException.validation("Approval is blocked until exactly 3 persisted vehicle photos are verified");
                 }
                 if (bans.contains(c, Validation.cnic(Json.getStr(data, "cnic", "")))) {
                     throw ApiException.forbidden("Approval blocked because this CNIC is banned");
@@ -424,6 +424,20 @@ public final class OwnerVehicleService {
                 throw ApiException.validation("A vehicle image cannot be reused by another application");
             }
         }
+    }
+
+    /** Approval is based on persisted links and document statuses, never the admin form's verification select. */
+    private boolean allPersistedPhotosVerified(PgConnection c, String applicationId, String ownerId, List<Long> expectedIds) {
+        List<Long> persisted = applications.imageIds(c, applicationId);
+        if (persisted.size() != 3 || expectedIds.size() != 3 || !new HashSet<>(persisted).equals(new HashSet<>(expectedIds))) return false;
+        for (Long id : persisted) {
+            JsonObject doc = documents.get(c, id);
+            if (doc == null || !"Verified".equals(Json.getStr(doc, "status", "")) ||
+                    !"user".equals(Json.getStr(doc, "ownerType", "")) ||
+                    !ownerId.equals(Json.getStr(doc, "ownerId", "")) ||
+                    !"photo".equals(Json.getStr(doc, "kind", ""))) return false;
+        }
+        return true;
     }
 
     private static JsonObject editable(JsonObject base, JsonObject changes) {

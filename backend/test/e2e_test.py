@@ -344,11 +344,20 @@ s, b = req("POST", f"/api/documents/{doc_id}/review", {"status": "Verified"}, to
 check("admin review doc", s == 200, f"{s}")
 
 print("== 8. Payments (never auto-verified) ==")
+def upload_customer_receipt(token=cust):
+    status, receipt = req("POST", "/api/uploads", {"dataUrl": data_url, "kind": "receipt", "ownerType": "user"}, token)
+    check("customer receipt stored privately", status == 201 and receipt.get("status") == "Pending", f"{status} {receipt}")
+    return receipt.get("id")
+
 amount = order1["totals"]["total"]
-s, pay = req("POST", "/api/payments/submit", {"bookingId": oid, "method": "JazzCash", "amount": amount, "tid": "TID123456", "receiptDoc": doc_id}, cust)
+receipt_id = upload_customer_receipt()
+# Request amount is checked against the booking total; it is never trusted.
+s, b = req("POST", "/api/payments/submit", {"bookingId": oid, "method": "JazzCash", "amount": amount - 1, "tid": "TIDSHORT", "receiptDoc": receipt_id}, cust)
+check("understated receipt amount rejected", s == 422, f"{s} {b}")
+s, pay = req("POST", "/api/payments/submit", {"bookingId": oid, "method": "JazzCash", "amount": amount, "tid": "TID123456", "receiptDoc": receipt_id}, cust)
 check("payment submit 201 Pending", s == 201 and pay.get("status") == "Pending Verification", f"{s} {pay}")
 pay_id = pay.get("id") if s == 201 else None
-s, b = req("POST", "/api/payments/submit", {"bookingId": oid, "method": "JazzCash", "amount": amount, "tid": "TID123456", "receiptDoc": doc_id}, cust)
+s, b = req("POST", "/api/payments/submit", {"bookingId": oid, "method": "JazzCash", "amount": amount, "tid": "TID123456", "receiptDoc": receipt_id}, cust)
 check("duplicate pending payment 409", s == 409, f"{s} {b}")
 s, ob = req("GET", f"/api/orders/{oid}", token=admin)
 check("booking now Pending Verification", s == 200 and ob.get("status") == "Pending Verification", f"{s} {ob.get('status')}")
@@ -369,12 +378,14 @@ check("re-verify 409", s == 409, f"{s} {b}")
 d4 = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 30))
 s, o3 = mk_order([fleet[4]["id"]], d4, time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 31)), cust)
 oid3 = o3.get("id")
-s, p3 = req("POST", "/api/payments/submit", {"bookingId": oid3, "method": "easypaisa", "amount": o3["totals"]["total"], "tid": "TID999", "receiptDoc": doc_id}, cust)
+receipt3 = upload_customer_receipt()
+s, p3 = req("POST", "/api/payments/submit", {"bookingId": oid3, "method": "easypaisa", "amount": o3["totals"]["total"], "tid": "TID999", "receiptDoc": receipt3}, cust)
 s, b = req("POST", f"/api/payments/{p3['id']}/review", {"action": "reupload", "note": "blurry"}, token=admin)
 check("reupload action", s == 200 and b.get("status") == "Reupload", f"{s} {b}")
 s, ob3 = req("GET", f"/api/orders/{oid3}", token=admin)
 check("booking Reupload Requested", ob3.get("paymentStatus") == "Reupload Requested", f"{ob3.get('paymentStatus')}")
-s, p3b = req("POST", "/api/payments/submit", {"bookingId": oid3, "method": "easypaisa", "amount": o3["totals"]["total"], "tid": "TID999", "receiptDoc": doc_id}, cust)
+receipt3b = upload_customer_receipt()
+s, p3b = req("POST", "/api/payments/submit", {"bookingId": oid3, "method": "easypaisa", "amount": o3["totals"]["total"], "tid": "TID999", "receiptDoc": receipt3b}, cust)
 check("re-upload after reupload allowed", s == 201, f"{s} {p3b}")
 s, b = req("POST", f"/api/payments/{p3b['id']}/review", {"action": "reject", "note": "wrong amount"}, token=admin)
 check("reject action", s == 200 and b.get("status") == "Rejected", f"{s} {b}")
@@ -392,7 +403,8 @@ s, ot = mk_order([temp_id], time.strftime("%Y-%m-%d", time.gmtime(time.time() + 
 # pay + pickup the temp-car booking
 if s == 201:
     otid = ot["id"]
-    s, pt = req("POST", "/api/payments/submit", {"bookingId": otid, "method": "Cash on pickup", "amount": ot["totals"]["total"], "tid": "TIDCASH1", "receiptDoc": doc_id}, cust)
+    receipt_temp = upload_customer_receipt()
+    s, pt = req("POST", "/api/payments/submit", {"bookingId": otid, "method": "Cash on pickup", "amount": ot["totals"]["total"], "tid": "TIDCASH1", "receiptDoc": receipt_temp}, cust)
     # cash-on-pickup booking: verify still possible? it's Pending Verification; verify it
     s, pv = req("POST", f"/api/payments/{pt['id']}/review", {"action": "verify"}, token=admin)
     s, b = req("POST", f"/api/bookings/{otid}/pickup", {}, token=admin)

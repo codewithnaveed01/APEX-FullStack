@@ -532,3 +532,17 @@ body:not(.page-home) .chat-fab:hover,body:not(.page-home) .chip:hover,body:not(.
 .owner-listed-card>img{width:180px;height:118px;object-fit:cover;border-radius:9px;background:#ece9e0}.owner-ledger{display:grid;gap:9px;margin-top:9px;max-height:300px;overflow:auto}.owner-ledger>div{padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2)}.owner-ledger p{margin-top:4px}
 .owner-edit-image-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:10px}.owner-edit-image-slot{padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}.owner-edit-image-slot img{display:block;width:100%;height:120px;object-fit:cover;border-radius:7px;background:#ece9e0;margin:7px 0 9px}.owner-edit-image-slot input{width:100%}
 @media(max-width:650px){.owner-listed-card{grid-template-columns:1fr}.owner-listed-card>img{width:100%;height:180px}.owner-edit-image-grid{grid-template-columns:1fr}}
+
+/* Contextual operations drawer: messages never reserve a permanent sidebar. */
+body.page-admin .admin-workspace{display:block;padding-bottom:60px}
+body.page-admin .admin-content{width:100%}
+body.page-admin .admin-inbox-shell{display:none;position:fixed;z-index:80;right:20px;top:82px;width:min(420px,calc(100vw - 40px));max-width:none}
+body.page-admin .admin-inbox-shell.expanded{display:block}
+body.page-admin .admin-inbox-shell .inbox-panel{height:min(76vh,710px);min-height:430px;box-shadow:var(--depth-3)}
+@media(max-width:850px){
+  body.page-admin .admin-workspace{padding-bottom:80px}
+  body.page-admin .admin-inbox-shell{right:12px;top:auto;bottom:12px;width:calc(100vw - 24px)}
+  body.page-admin .admin-inbox-shell .inbox-panel{height:min(72vh,590px);min-height:340px}
+}
+.payment-pending{background:#fff8dd!important;border-left:3px solid #d79b00}
+.payment-pending-label{display:block;color:#8b5700;font-size:11px}

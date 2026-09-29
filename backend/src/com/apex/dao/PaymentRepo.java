@@ -45,6 +45,14 @@ public final class PaymentRepo {
         return Long.parseLong(r.first());
     }
 
+    /** Compare-and-set prevents two reviewers from crediting the same receipt. */
+    public boolean updatePendingStatus(PgConnection c, long id, String status, String note, String reviewedBy) {
+        QueryResult r = c.query("UPDATE payments SET status = $1, note = $2, reviewed_at = now(), reviewed_by = $3" +
+                        " WHERE id = $4 AND status = 'Pending Verification' RETURNING id",
+                new String[]{status, note == null ? "" : note, reviewedBy, String.valueOf(id)});
+        return r.rowCount() > 0;
+    }
+
     public void updateStatus(PgConnection c, long id, String status, String note, String reviewedBy) {
         c.query("UPDATE payments SET status = $1, note = $2, reviewed_at = now(), reviewed_by = $3 WHERE id = $4",
                 new String[]{status, note == null ? "" : note, reviewedBy, String.valueOf(id)});

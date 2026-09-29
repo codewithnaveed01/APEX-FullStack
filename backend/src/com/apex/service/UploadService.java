@@ -1,7 +1,9 @@
 package com.apex.service;
 
 import com.apex.dao.DocumentRepo;
+import com.apex.dao.BookingRepo;
 import com.apex.db.Database;
+import com.apex.model.Booking;
 import com.apex.util.Json;
 import com.apex.web.ApiException;
 import com.google.gson.JsonObject;
@@ -147,8 +149,42 @@ public final class UploadService {
             JsonObject doc = docs.get(c, id);
             if (doc == null) throw ApiException.notFound("Document not found");
             docs.updateStatus(c, id, status);
+            // CNIC review is contextual: only bookings explicitly linked to the
+            // reviewed front/back documents are updated. A browser cannot set
+            // identityStatus itself.
+            if ("cnic_front".equals(Json.getStr(doc, "kind", "")) ||
+                    "cnic_back".equals(Json.getStr(doc, "kind", ""))) {
+                refreshLinkedBookingIdentity(c, id);
+            }
             return null;
         });
+    }
+
+    private void refreshLinkedBookingIdentity(com.apex.db.PgConnection c, long reviewedId) {
+        BookingRepo bookingRepo = new BookingRepo(db);
+        for (Booking booking : bookingRepo.listAll(c)) {
+            if (booking.data == null || !booking.data.has("identityDocs") ||
+                    !booking.data.get("identityDocs").isJsonArray()) continue;
+            boolean linked = false, front = false, back = false, rejected = false;
+            for (com.google.gson.JsonElement el : booking.data.getAsJsonArray("identityDocs")) {
+                long docId;
+                try { docId = el.getAsLong(); } catch (RuntimeException ignored) { continue; }
+                if (docId == reviewedId) linked = true;
+                JsonObject doc = docs.get(c, docId);
+                if (doc == null || !"user".equals(Json.getStr(doc, "ownerType", "")) ||
+                        !booking.userId.equals(Json.getStr(doc, "ownerId", ""))) continue;
+                String kind = Json.getStr(doc, "kind", "");
+                String state = Json.getStr(doc, "status", "Pending");
+                if ("cnic_front".equals(kind)) { front = "Verified".equals(state); rejected |= "Rejected".equals(state); }
+                if ("cnic_back".equals(kind)) { back = "Verified".equals(state); rejected |= "Rejected".equals(state); }
+            }
+            if (!linked) continue;
+            String next = rejected ? "Rejected" : (front && back ? "Verified" : "Pending");
+            if (!next.equals(booking.identityStatus)) {
+                booking.data.addProperty("identityStatus", next);
+                bookingRepo.upsert(c, booking);
+            }
+        }
     }
 
     /** Magic-byte sniffing: returns {ext, contentType} or null. */

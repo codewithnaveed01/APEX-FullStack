@@ -53,6 +53,7 @@ public final class Main {
         new OwnerController(app).register(router);
         new BookingController(app).register(router);
         new PaymentController(app).register(router);
+        new DriverPayoutController(app).register(router);
         new DocumentController(app).register(router);
         new ReviewController(app).register(router);
         new ChatController(app).register(router);

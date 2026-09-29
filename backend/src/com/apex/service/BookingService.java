@@ -196,26 +196,22 @@ public final class BookingService {
             if (bans.contains(c, fIdentity)) {
                 throw ApiException.forbidden("This CNIC is banned from services");
             }
-            // 3) walk-in CNIC photos must both belong to this booking's customer.
+            // 3) CNIC photos must belong to this booking's customer. A client
+            // may attach them, but cannot claim their verification state.
             boolean front = false, back = false;
             if (identityDocs != null) {
                 for (JsonElement el : identityDocs) {
                     long docId = el.isJsonPrimitive() && el.getAsJsonPrimitive().isNumber()
                             ? el.getAsJsonPrimitive().getAsLong() : -1;
                     JsonObject doc = docId > 0 ? documents.get(c, docId) : null;
-                    if (doc == null) {
-                        throw ApiException.validation("An attached identity document is invalid");
+                    if (doc == null || !"user".equals(Json.getStr(doc, "ownerType", "")) ||
+                            !userId.equals(Json.getStr(doc, "ownerId", ""))) {
+                        throw ApiException.validation("CNIC photos must belong to this booking's customer");
                     }
-                    if (manual) {
-                        if (!"user".equals(Json.getStr(doc, "ownerType", "")) ||
-                                !userId.equals(Json.getStr(doc, "ownerId", ""))) {
-                            throw ApiException.validation("CNIC photos must belong to the walk-in customer");
-                        }
-                        String kind = Json.getStr(doc, "kind", "");
-                        if ("cnic_front".equals(kind)) front = true;
-                        else if ("cnic_back".equals(kind)) back = true;
-                        else throw ApiException.validation("Walk-in bookings require CNIC front and back photos");
-                    }
+                    String kind = Json.getStr(doc, "kind", "");
+                    if ("cnic_front".equals(kind)) front = true;
+                    else if ("cnic_back".equals(kind)) back = true;
+                    else throw ApiException.validation("Identity documents must be CNIC front and back photos");
                 }
             }
             if (manual && (!front || !back)) {
@@ -276,7 +272,10 @@ public final class BookingService {
             order.addProperty("identityType", fIdentityType);
             order.addProperty("identity", fIdentity);
             order.addProperty("identityMasked", maskIdentity(fIdentityType, fIdentity));
-            order.addProperty("identityStatus", manual ? "Pending"
+            // Any attached CNIC starts pending and only document review can
+            // change it to Verified/Rejected. Legacy no-document reservations
+            // retain their historical client state for backwards compatibility.
+            order.addProperty("identityStatus", manual || identityDocs != null ? "Pending"
                     : Json.clean(Json.getStr(body, "identityStatus", "")).isEmpty()
                             ? "Pending" : Json.getStr(body, "identityStatus", "Pending"));
             order.add("totals", totals);
@@ -365,6 +364,9 @@ public final class BookingService {
             if (!"Pickup Pending".equals(b.status) && !"Confirmed".equals(b.status)) {
                 throw ApiException.conflict("Only Pickup Pending or Confirmed bookings can start (current: " + b.status + ")");
             }
+            if ("Rejected".equalsIgnoreCase(b.identityStatus)) {
+                throw ApiException.conflict("Pickup is blocked until rejected CNIC documents are re-uploaded and verified");
+            }
             if (driverId != null && driverId > 0) {
                 Driver d = drivers.get(c, driverId);
                 if (d == null) throw ApiException.notFound("Driver not found");
@@ -431,7 +433,12 @@ public final class BookingService {
                 if (!el.isJsonObject()) continue;
                 JsonObject it = el.getAsJsonObject();
                 JsonObject price = Json.obj(it, "price");
-                long rental = price != null ? Json.getLong(price, "rental", 0) : 0;
+                // A with-driver quote includes the driver's charge in rental. That
+                // amount belongs to the assigned driver and must not be included
+                // in the owner's 90/10 vehicle-rental split.
+                long quotedRental = price != null ? Json.getLong(price, "rental", 0) : 0;
+                long driverCharge = price != null ? Json.getLong(price, "driver", 0) : 0;
+                long rental = Math.max(0, quotedRental - Math.max(0, driverCharge));
                 if (rental <= 0) continue;
                 Car car = cars.get(c, Json.getLong(it, "carId", 0));
                 String ownerId = car == null || car.ownerId == null ? "" : car.ownerId;

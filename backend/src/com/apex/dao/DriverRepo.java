@@ -48,8 +48,23 @@ public final class DriverRepo {
     }
 
     public void replaceAll(PgConnection c, List<Driver> drivers) {
-        c.simpleQuery("DELETE FROM drivers");
+        // Upsert first instead of delete/reinsert: payout accounts and the
+        // immutable payout ledger reference drivers and must never be broken by
+        // a routine admin sync.
         for (Driver d : drivers) upsert(c, d);
+        if (drivers.isEmpty()) {
+            c.simpleQuery("DELETE FROM drivers");
+            return;
+        }
+        StringBuilder sql = new StringBuilder("DELETE FROM drivers WHERE id NOT IN (");
+        String[] args = new String[drivers.size()];
+        for (int i = 0; i < drivers.size(); i++) {
+            if (i > 0) sql.append(',');
+            sql.append('$').append(i + 1);
+            args[i] = String.valueOf(drivers.get(i).id);
+        }
+        sql.append(')');
+        c.query(sql.toString(), args);
     }
 
     public void delete(PgConnection c, long id) {

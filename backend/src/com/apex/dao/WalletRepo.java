@@ -33,6 +33,13 @@ public final class WalletRepo {
         c.query("UPDATE wallet SET balance = balance + $1 WHERE id = 1", new String[]{String.valueOf(delta)});
     }
 
+    /** Atomic debit used for external payouts; false means the balance was insufficient. */
+    public boolean deductAdminIfSufficient(PgConnection c, long amount) {
+        QueryResult r = c.query("UPDATE wallet SET balance = balance - $1 WHERE id = 1 AND balance >= $1 RETURNING balance",
+                new String[]{String.valueOf(amount)});
+        return r.rowCount() > 0;
+    }
+
     public long addOwner(PgConnection c, String ownerId, long delta) {
         QueryResult r = c.query("INSERT INTO owner_wallets(owner_id, balance) VALUES ($1, $2)" +
                 " ON CONFLICT (owner_id) DO UPDATE SET balance = owner_wallets.balance + $2" +

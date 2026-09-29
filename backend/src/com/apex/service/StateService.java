@@ -171,7 +171,9 @@ public final class StateService {
                     JsonObject d = el.getAsJsonObject();
                     if (Json.getStr(d, "id", "").isEmpty()) throw ApiException.validation("Sync drivers[] entries need an id");
                     try {
-                        list.add(Driver.fromJson(d));
+                        Driver driver = Driver.fromJson(d);
+                        validateDriverApproval(c, driver);
+                        list.add(driver);
                     } catch (NumberFormatException e) {
                         throw ApiException.validation("Invalid driver id: " + Json.getStr(d, "id", ""));
                     }
@@ -338,6 +340,30 @@ public final class StateService {
                     }
                 }
             }
+        }
+    }
+
+    /** Legacy seeded drivers have no docs. A manually added driver has docs and can only become approved after all three are verified. */
+    private void validateDriverApproval(PgConnection c, Driver driver) {
+        String state = driver.status == null ? "" : driver.status;
+        if (!("Approved".equalsIgnoreCase(state) || "Active".equalsIgnoreCase(state))) return;
+        if (driver.data == null || !driver.data.has("docs") || !driver.data.get("docs").isJsonArray()) return;
+        JsonArray ids = driver.data.getAsJsonArray("docs");
+        boolean license = false, front = false, back = false;
+        for (JsonElement el : ids) {
+            long docId;
+            try { docId = el.getAsLong(); } catch (RuntimeException ignored) { continue; }
+            QueryResult r = c.query("SELECT kind, status, owner_type, owner_id FROM documents WHERE id=$1",
+                    new String[]{String.valueOf(docId)});
+            if (r.rowCount() == 0) continue;
+            String[] row = r.rows.get(0);
+            if (!"Verified".equals(row[1]) || !"driver".equals(row[2]) || !String.valueOf(driver.id).equals(row[3])) continue;
+            if ("license".equals(row[0])) license = true;
+            if ("cnic_front".equals(row[0])) front = true;
+            if ("cnic_back".equals(row[0])) back = true;
+        }
+        if (!(license && front && back)) {
+            throw ApiException.conflict("Driver approval is blocked until linked licence and both CNIC documents are verified");
         }
     }
 

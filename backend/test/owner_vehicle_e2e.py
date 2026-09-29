@@ -73,6 +73,12 @@ def photos(token, count=3):
     return ids
 
 
+def verify_photos(ids):
+    for image_id in ids:
+        status, result = request("POST", f"/api/documents/{image_id}/review", {"status": "Verified"}, admin)
+        check("owner photo verified in application context", status == 200 and result.get("status") == "ok", f"{status} {result}")
+
+
 def application(owner_token, user, photo_ids, registration):
     return request("POST", "/api/applications", {
         "owner": user["name"], "phone": user["phone"], "email": user["email"],
@@ -105,6 +111,11 @@ for image_id in first_photos:
     s, doc = request("GET", "/api/documents/" + str(image_id), token=owner)
     check("PostgreSQL image bytes remain readable", s == 200 and doc.get("dataUrl", "").startswith("data:image/png"), f"{s}")
 
+status, blocked_unverified = request("PUT", "/api/applications/" + app1_id, {
+    "verification": "Verified", "status": "Approved for onboarding", "note": "approved"
+}, admin)
+check("unverified persisted photos block application approval", status == 422, f"{status} {blocked_unverified}")
+verify_photos(first_photos)
 status, approved1 = request("PUT", "/api/applications/" + app1_id, {
     "verification": "Verified", "status": "Approved for onboarding", "note": "approved"
 }, admin)
@@ -121,6 +132,7 @@ check("same application cannot be approved twice", status == 409, f"{status} {du
 second_photos = photos(owner)
 status, app2 = application(owner, owner_user, second_photos, "OWN-002")
 app2_id = app2.get("id")
+verify_photos(second_photos)
 status, approved2 = request("PUT", "/api/applications/" + app2_id, {
     "verification": "Verified", "status": "Approved for onboarding"
 }, admin)
@@ -146,6 +158,7 @@ check("owner edit can replace one separate image while retaining the other two",
 status, still_live = request("GET", f"/api/fleet/{car1_id}")
 check("pending owner edit does not change live fleet", status == 200 and still_live.get("name") == "Suzuki Alto" and
       still_live.get("rate") == 5200 and still_live.get("mainImageId") == first_photos[0], f"{still_live}")
+verify_photos([replacement_exterior])
 status, approved_edit = request("PUT", "/api/applications/" + app1_id, {
     "verification": "Verified", "status": "Approved for onboarding"
 }, admin)
