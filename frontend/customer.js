@@ -1277,14 +1277,41 @@ async function saveOwnerPayout(e){
 }
 function editOwnerCar(id){
   const c=fleet.find(car=>car.id===+id);if(!c)return toast('Car data is still loading.');
-  modal('Request changes · '+esc(c.name),`<form onsubmit="submitOwnerCarEdit(event,${c.id})"><div class="notice">Your current listing stays live. Changes publish only after admin approval.</div><div class="formgrid"><div class="field"><label>Make</label><input name="brand" required value="${esc(c.brand)}"></div><div class="field"><label>Model</label><input name="model" required value="${esc(c.name.startsWith(c.brand)?c.name.slice(c.brand.length).trim():c.name)}"></div><div class="field"><label>Year</label><input name="year" type="number" required value="${c.year}"></div><div class="field"><label>Daily rate PKR</label><input name="rate" type="number" min="1" required value="${c.rate}"></div><div class="field"><label>Registration</label><input name="registration" required value="${esc(c.plate||'')}"></div><div class="field"><label>Condition</label><select name="condition">${['Excellent','Very good','Good'].map(v=>`<option ${c.condition===v?'selected':''}>${v}</option>`).join('')}</select></div><div class="field"><label>Odometer km</label><input name="mileage" type="number" min="0" required value="${parseInt(String(c.km||'0').replace(/\D/g,''),10)||0}"></div><div class="field wide"><label>Replace images (optional: choose exactly 3)</label><input id="owner-edit-photos" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple><p class="file-note">Order: exterior, interior, detail/engine. Leave empty to keep the current three images.</p></div></div><button class="btn full" style="margin-top:12px">Submit changes for approval</button></form>`,true)
+  const pics=gallery(c);
+  const imageSlots=[
+    ['Exterior / main image','owner-edit-exterior','owner-edit-preview-exterior',getCarPhoto(c,pics[0].key)],
+    ['Interior image','owner-edit-interior','owner-edit-preview-interior',getCarPhoto(c,pics[1].key)],
+    ['Detail / engine image','owner-edit-detail','owner-edit-preview-detail',getCarPhoto(c,pics[2].key)]
+  ];
+  const imageFields=imageSlots.map(([label,inputId,previewId,src],index)=>`<div class="owner-edit-image-slot"><label>${index+1}. ${label}</label><img id="${previewId}" src="${esc(src)}" onerror="this.onerror=null;this.src='${photo(c.image)}'" alt="Current ${esc(label.toLowerCase())}"><input id="${inputId}" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onchange="previewOwnerEditImage(this,'${previewId}')"><p class="file-note">Choose a file only to replace this image.</p></div>`).join('');
+  modal('Request changes · '+esc(c.name),`<form onsubmit="submitOwnerCarEdit(event,${c.id})"><div class="notice">Your current listing stays live. Changes publish only after admin approval.</div><div class="formgrid"><div class="field"><label>Make</label><input name="brand" required value="${esc(c.brand)}"></div><div class="field"><label>Model</label><input name="model" required value="${esc(c.name.startsWith(c.brand)?c.name.slice(c.brand.length).trim():c.name)}"></div><div class="field"><label>Year</label><input name="year" type="number" required value="${c.year}"></div><div class="field"><label>Daily rate PKR</label><input name="rate" type="number" min="1" required value="${c.rate}"></div><div class="field"><label>Registration</label><input name="registration" required value="${esc(c.plate||'')}"></div><div class="field"><label>Condition</label><select name="condition">${['Excellent','Very good','Good'].map(v=>`<option ${c.condition===v?'selected':''}>${v}</option>`).join('')}</select></div><div class="field"><label>Odometer km</label><input name="mileage" type="number" min="0" required value="${parseInt(String(c.km||'0').replace(/\D/g,''),10)||0}"></div><div class="field wide"><label>Vehicle images (optional)</label><p class="file-note">Each image has its own upload. Replace one, two, or all three; unselected images stay unchanged.</p><div class="owner-edit-image-grid">${imageFields}</div></div></div><button class="btn full" style="margin-top:12px">Submit changes for approval</button></form>`,true)
+}
+function previewOwnerEditImage(input,previewId){
+  const file=input?.files?.[0],preview=document.getElementById(previewId);if(!file||!preview)return;
+  const url=URL.createObjectURL(file);preview.onload=()=>URL.revokeObjectURL(url);preview.src=url;
 }
 async function submitOwnerCarEdit(e,id){
   e.preventDefault();const form=e.target,data=Object.fromEntries(new FormData(form));delete data[''];data.year=+data.year;data.rate=+data.rate;data.mileage=+data.mileage;
-  const files=[...(document.getElementById('owner-edit-photos')?.files||[])];if(files.length&&files.length!==3)return toast('Choose exactly 3 replacement images, or leave images empty.');
+  const c=fleet.find(car=>car.id===+id);if(!c)return toast('Car data is still loading.');
+  const files=['owner-edit-exterior','owner-edit-interior','owner-edit-detail'].map(inputId=>document.getElementById(inputId)?.files?.[0]||null);
   const button=form.querySelector('button.full');button.disabled=true;button.textContent='Submitting…';
-  try{if(files.length){data.photoIds=[];for(const file of files){if(file.size>2500000)throw new Error('Each image must be under 2.5 MB.');const uploaded=await v3Upload(await v3ReadFile(file),'photo','user',account.id);data.photoIds.push(uploaded.id)}}await v3Api('/api/owner/cars/'+id+'/edit',{method:'PUT',body:JSON.stringify(data)});closeModal();await v3RefreshBootstrap();render();toast('Changes submitted — current live listing is unchanged until approval')}
-  catch(err){toast('Changes not submitted: '+err.message);button.disabled=false;button.textContent='Submit changes for approval'}
+  try{
+    if(files.some(Boolean)){
+      const existing=[+c.mainImageId,+c.interiorImageId,+c.detailImageId];
+      data.photoIds=[];
+      for(let index=0;index<3;index++){
+        const file=files[index];
+        if(file){
+          if(file.size>2500000)throw new Error('Each image must be under 2.5 MB.');
+          const uploaded=await v3Upload(await v3ReadFile(file),'photo','user',account.id);data.photoIds.push(uploaded.id);
+        }else{
+          if(!existing[index])throw new Error('This listing has no saved image for slot '+(index+1)+'. Please choose all three images.');
+          data.photoIds.push(existing[index]);
+        }
+      }
+    }
+    await v3Api('/api/owner/cars/'+id+'/edit',{method:'PUT',body:JSON.stringify(data)});closeModal();await v3RefreshBootstrap();render();toast('Changes submitted — current live listing is unchanged until approval')
+  }catch(err){toast('Changes not submitted: '+err.message);button.disabled=false;button.textContent='Submit changes for approval'}
 }
 async function deleteOwnerCar(id){
   if(!confirm('Delete this listed car? This cannot be undone. Deletion is blocked while bookings or financial settlements are pending.'))return;

@@ -135,17 +135,25 @@ check("unauthorized owner cannot edit another listing", status == 403, f"{status
 status, denied = request("DELETE", f"/api/owner/cars/{car1_id}", token=other)
 check("unauthorized owner cannot delete another listing", status == 403, f"{status} {denied}")
 
+replacement_exterior = photos(owner, 1)[0]
+edit_photos = [replacement_exterior, first_photos[1], first_photos[2]]
 status, pending_edit = request("PUT", f"/api/owner/cars/{car1_id}/edit", {
-    "model": "Alto Updated", "rate": 6100
+    "model": "Alto Updated", "rate": 6100, "photoIds": edit_photos
 }, owner)
-check("owner edit returns to pending approval", status == 200 and pending_edit.get("status") == "Submitted" and pending_edit.get("editStatus") == "Pending approval", f"{status} {pending_edit}")
+check("owner edit can replace one separate image while retaining the other two", status == 200 and
+      pending_edit.get("photoIds") == edit_photos and pending_edit.get("status") == "Submitted" and
+      pending_edit.get("editStatus") == "Pending approval", f"{status} {pending_edit}")
 status, still_live = request("GET", f"/api/fleet/{car1_id}")
-check("pending owner edit does not change live fleet", status == 200 and still_live.get("name") == "Suzuki Alto" and still_live.get("rate") == 5200, f"{still_live}")
+check("pending owner edit does not change live fleet", status == 200 and still_live.get("name") == "Suzuki Alto" and
+      still_live.get("rate") == 5200 and still_live.get("mainImageId") == first_photos[0], f"{still_live}")
 status, approved_edit = request("PUT", "/api/applications/" + app1_id, {
     "verification": "Verified", "status": "Approved for onboarding"
 }, admin)
 status2, now_live = request("GET", f"/api/fleet/{car1_id}")
-check("admin approval publishes owner edit", status == 200 and status2 == 200 and now_live.get("name") == "Suzuki Alto Updated" and now_live.get("rate") == 6100, f"{status} {now_live}")
+check("admin approval publishes owner edit and separate image replacement", status == 200 and status2 == 200 and
+      now_live.get("name") == "Suzuki Alto Updated" and now_live.get("rate") == 6100 and
+      now_live.get("mainImageId") == replacement_exterior and now_live.get("interiorImageId") == first_photos[1] and
+      now_live.get("detailImageId") == first_photos[2], f"{status} {now_live}")
 
 start = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 60))
 end = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 86400 * 61))
