@@ -29,6 +29,8 @@ public final class AppConfig {
     public final String adminPassword;
     public final int sessionHours;
     public final int dbPoolSize;
+    /** Stable secret used only for application-layer AES-GCM payout encryption. */
+    public final String payoutEncryptionKey;
 
     public final String dbHost;
     public final int dbPort;
@@ -41,6 +43,12 @@ public final class AppConfig {
         port = b.port; home = b.home; staticDir = b.staticDir; uploadsDir = b.uploadsDir;
         adminUsername = b.adminUsername; adminPassword = b.adminPassword;
         sessionHours = b.sessionHours; dbPoolSize = b.dbPoolSize;
+        // A dedicated env secret is preferred. The database credentials are a
+        // stable deployment-local fallback so existing Railway services keep
+        // working without storing a key in source control.
+        String configuredPayoutKey = env("APEX_PAYOUT_ENCRYPTION_KEY");
+        payoutEncryptionKey = configuredPayoutKey != null ? configuredPayoutKey
+                : "apex-payout:" + b.dbHost + ":" + b.dbPort + ":" + b.dbDatabase + ":" + b.dbUser + ":" + b.dbPassword;
         dbHost = b.dbHost; dbPort = b.dbPort; dbUser = b.dbUser;
         dbPassword = b.dbPassword; dbDatabase = b.dbDatabase; dbSsl = b.dbSsl;
     }

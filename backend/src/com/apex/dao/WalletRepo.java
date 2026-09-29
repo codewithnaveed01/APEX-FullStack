@@ -60,6 +60,24 @@ public final class WalletRepo {
                         note == null ? "" : note});
     }
 
+    /**
+     * Records one immutable 90/10 settlement. The unique booking/car key makes
+     * retries idempotent; callers credit balances only when this returns true.
+     */
+    public boolean recordOwnerPayout(PgConnection c, String ownerId, String bookingId,
+                                     long carId, String carName, String applicationId,
+                                     long gross, long companyShare, long ownerShare, String note) {
+        QueryResult r = c.query("INSERT INTO owner_payout_ledger(owner_id, booking_id, car_id, car_name," +
+                " application_id, gross_rental, company_share, owner_share, status, note, settled_at)" +
+                " VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Completed',$9,now())" +
+                " ON CONFLICT (booking_id, car_id) DO NOTHING RETURNING id",
+                new String[]{ownerId, bookingId, String.valueOf(carId), carName == null ? "" : carName,
+                        applicationId == null || applicationId.isBlank() ? null : applicationId,
+                        String.valueOf(gross), String.valueOf(companyShare), String.valueOf(ownerShare),
+                        note == null ? "" : note});
+        return r.rowCount() > 0;
+    }
+
     public JsonArray transactions(PgConnection c, int limit) {
         JsonArray out = new JsonArray();
         QueryResult r = c.query("SELECT id, type, amount, account, note, status, created_at" +

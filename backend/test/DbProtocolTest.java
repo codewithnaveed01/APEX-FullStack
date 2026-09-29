@@ -33,7 +33,9 @@ public final class DbProtocolTest {
             Set<String> expected = Set.of("users", "sessions", "cars", "drivers", "bookings",
                     "booking_items", "owner_applications", "notifications", "chat_threads",
                     "chat_messages", "banned_cnic", "wallet", "owner_wallets",
-                    "wallet_transactions", "documents", "payments", "reviews", "app_settings");
+                    "wallet_transactions", "documents", "payments", "reviews", "app_settings",
+                    "vehicle_application_images", "owner_application_history", "owner_payout_accounts",
+                    "owner_payout_ledger", "owner_car_deletions");
             QueryResult tables = db.with(c -> c.query(
                     "SELECT table_name FROM information_schema.tables " +
                     "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'",
@@ -77,7 +79,7 @@ public final class DbProtocolTest {
                 check(e.getMessage().contains("PostgreSQL rejected DATABASE_URL"),
                         "Bad credentials should fail fast with an actionable message");
             }
-            System.out.println("PASS: SCRAM auth (including bad password), 18 tables, migration, SQL error recovery");
+            System.out.println("PASS: SCRAM auth (including bad password), owner marketplace tables, migrations, SQL error recovery");
         }
     }
 

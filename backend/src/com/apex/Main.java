@@ -50,6 +50,7 @@ public final class Main {
         new AdminController(app).register(router);
         new AuthController(app).register(router);
         new FleetController(app).register(router);
+        new OwnerController(app).register(router);
         new BookingController(app).register(router);
         new PaymentController(app).register(router);
         new DocumentController(app).register(router);

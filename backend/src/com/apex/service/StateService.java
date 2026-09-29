@@ -206,17 +206,11 @@ public final class StateService {
                 counts[3] = incoming.size();
             }
 
-            // 5) applications (upsert, never delete)
+            // 5) applications are server-workflow owned. Approval must atomically
+            // create/update a fleet car, so stale browser state is intentionally
+            // never allowed to upsert application status through generic sync.
             if (state.has("applications")) {
-                int n = 0;
-                for (JsonElement el : arr(state, "applications")) {
-                    if (!el.isJsonObject()) continue;
-                    JsonObject d = el.getAsJsonObject();
-                    if (Json.getStr(d, "id", "").isEmpty()) throw ApiException.validation("Sync applications[] entries need an id");
-                    apps.upsert(c, Application.fromJson(d));
-                    n++;
-                }
-                counts[4] = n;
+                counts[4] = arr(state, "applications").size();
             }
 
             // 6) notifications (upsert, never delete)

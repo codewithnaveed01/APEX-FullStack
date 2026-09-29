@@ -527,3 +527,7 @@ body:not(.page-home) .chat-fab:hover,body:not(.page-home) .chip:hover,body:not(.
 .admin-site-chat .chat-panel:not(:has(.inbox-thread)){height:220px}
 .application-photos{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
 .application-photos img{display:block;width:100%;height:170px;object-fit:contain;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
+.application-photos figure{margin:0}.application-photos figcaption{font-size:11px;color:var(--muted);padding-top:6px}
+.owner-account{margin:0 0 34px}.owner-listed-grid{display:grid;gap:12px}.owner-listed-card{display:grid;grid-template-columns:180px 1fr;gap:16px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg-2)}
+.owner-listed-card>img{width:180px;height:118px;object-fit:cover;border-radius:9px;background:#ece9e0}.owner-ledger{display:grid;gap:9px;margin-top:9px;max-height:300px;overflow:auto}.owner-ledger>div{padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2)}.owner-ledger p{margin-top:4px}
+@media(max-width:650px){.owner-listed-card{grid-template-columns:1fr}.owner-listed-card>img{width:100%;height:180px}}

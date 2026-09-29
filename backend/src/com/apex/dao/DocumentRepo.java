@@ -67,6 +67,34 @@ public final class DocumentRepo {
         return r.rowCount() > 0;
     }
 
+    /** A vehicle photo may only be attached by the user who uploaded it. */
+    public boolean isOwnedVehiclePhoto(PgConnection c, long id, String ownerId) {
+        QueryResult r = c.query("SELECT 1 FROM documents WHERE id = $1 AND owner_type = 'user'" +
+                " AND owner_id = $2 AND kind = 'photo'", new String[]{String.valueOf(id), ownerId});
+        return r.rowCount() > 0;
+    }
+
+    public boolean vehiclePhotoAttachedElsewhere(PgConnection c, long id, String applicationId) {
+        QueryResult r = c.query("SELECT 1 FROM vehicle_application_images WHERE document_id = $1" +
+                " AND application_id <> $2", new String[]{String.valueOf(id), applicationId == null ? "" : applicationId});
+        return r.rowCount() > 0;
+    }
+
+    /** Public bytes are exposed only after this exact image is linked to a live owner car. */
+    public JsonObject publicVehicleImage(PgConnection c, long id) {
+        QueryResult r = c.query("SELECT d.content_type, d.content FROM documents d" +
+                " JOIN vehicle_application_images vi ON vi.document_id = d.id" +
+                " JOIN cars ca ON ca.application_id = vi.application_id" +
+                " JOIN owner_applications a ON a.id = vi.application_id" +
+                " WHERE d.id = $1 AND ca.status <> 'Deleted' AND a.deleted_at IS NULL LIMIT 1",
+                new String[]{String.valueOf(id)});
+        if (r.rowCount() == 0) return null;
+        JsonObject out = new JsonObject();
+        out.addProperty("contentType", r.rows.get(0)[0] == null ? "image/jpeg" : r.rows.get(0)[0]);
+        out.addProperty("hex", r.rows.get(0)[1] == null ? "" : r.rows.get(0)[1]);
+        return out;
+    }
+
     public List<JsonObject> list() {
         return db.with(c -> {
             QueryResult r = c.query("SELECT id, owner_type, owner_id, kind, status, created_at" +

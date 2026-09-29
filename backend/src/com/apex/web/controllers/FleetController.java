@@ -165,46 +165,26 @@ public final class FleetController {
         });
 
         r.post("/api/applications", Router.Level.ANY, ctx -> {
-            JsonObject created = app.db.tx(c -> {
-                JsonObject d = ctx.body.deepCopy();
-                if (Json.getStr(d, "id", "").isEmpty()) {
-                    d.addProperty("id", "A" + Long.toString(System.currentTimeMillis(), 36).toUpperCase());
-                }
-                if (!"admin".equals(Json.getStr(ctx.session, "role", ""))) {
-                    d.addProperty("userId", Json.getStr(ctx.session, "userId", ""));
-                }
-                var a0 = com.apex.model.Application.fromJson(d);
-                app.apps.upsert(c, a0);
-                app.notifications.notifyAdmins(c, "New owner application",
-                        a0.owner + " applied with " + a0.brand + " " + a0.model,
-                        "application/" + a0.id, "Partner applications");
-                if (!a0.userId.isEmpty()) {
-                    app.notifications.notify(c, a0.userId, "Application submitted",
-                            "Your vehicle application has been received.", "application/" + a0.id, null);
-                }
-                return d;
-            });
+            JsonObject created = app.ownerVehicleService.createApplication(ctx.session, ctx.body);
             HttpUtil.sendJson(ctx.ex, 201, created);
         });
 
-        r.put("/api/applications/{id}", Router.Level.ADMIN, ctx -> {
+        r.put("/api/applications/{id}", Router.Level.ANY, ctx -> {
             String id = Json.clean(ctx.param("id"));
-            app.db.tx(c -> {
-                var existing = app.apps.get(c, id);
-                if (existing == null) throw ApiException.notFound("Application not found");
-                JsonObject d = existing.data.deepCopy();
-                for (var e : ctx.body.entrySet()) d.add(e.getKey(), e.getValue());
-                d.addProperty("id", id);
-                app.apps.upsert(c, com.apex.model.Application.fromJson(d));
-                return null;
-            });
-            ok(ctx);
+            JsonObject updated = ctx.isAdmin()
+                    ? app.ownerVehicleService.adminUpdate(ctx.session, id, ctx.body)
+                    : app.ownerVehicleService.requestApplicationEdit(ctx.session, id, ctx.body);
+            HttpUtil.sendJson(ctx.ex, 200, updated);
         });
 
         r.del("/api/applications/{id}", Router.Level.ADMIN, ctx -> {
             String id = Json.clean(ctx.param("id"));
             app.db.tx(c -> {
-                if (app.apps.get(c, id) == null) throw ApiException.notFound("Application not found");
+                var existing = app.apps.get(c, id);
+                if (existing == null) throw ApiException.notFound("Application not found");
+                if (existing.liveCarId > 0 || "Approved for onboarding".equals(existing.status)) {
+                    throw ApiException.conflict("Delete the linked fleet car through the owner-safe deletion workflow");
+                }
                 app.apps.delete(c, id);
                 return null;
             });
@@ -249,6 +229,7 @@ public final class FleetController {
     }
 
     private long nextCarId(com.apex.db.PgConnection c) {
+        c.simpleQuery("SELECT pg_advisory_xact_lock(hashtext('apex_next_car_id'))");
         var r = c.query("SELECT COALESCE(max(id), 1000) + 1 FROM cars", null);
         return Long.parseLong(r.first());
     }

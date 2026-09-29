@@ -233,9 +233,18 @@ s, b = req("POST", "/api/notifications/read", {}, token=cust)
 check("customer marks own alerts read", s == 200 and all(n.get("read") for n in req("GET", "/api/notifications/mine", token=cust)[1]), f"{s} {b}")
 s, b = req("GET", "/api/notifications/mine", token=admin)
 check("customer read does not clear admin alerts", s == 200 and any(not n.get("read") for n in b), f"{s} {b}")
+vehicle_data_url = "data:image/png;base64," + __import__("base64").b64encode(png_bytes()).decode()
+vehicle_photo_ids = []
+for _ in range(3):
+    ps, uploaded = req("POST", "/api/uploads", {
+        "dataUrl": vehicle_data_url, "kind": "photo", "ownerType": "user"}, cust)
+    if ps == 201: vehicle_photo_ids.append(uploaded.get("id"))
 s, application = req("POST", "/api/applications", {
-    "owner": "Test Customer", "brand": "Toyota", "model": "Yaris", "city": "Lahore", "year": 2024,
-    "status": "Submitted"}, token=cust)
+    "owner": "Test Customer", "phone": "03001234567", "brand": "Toyota", "model": "Yaris",
+    "city": "Lahore", "year": 2024, "registration": "TEST-001", "cnic": "3520212345678",
+    "license": "LHR-TEST-1", "mileage": 1000, "condition": "Excellent", "rate": 7000,
+    "preference": "Either", "availableFrom": time.strftime("%Y-%m-%d"),
+    "notes": "E2E owner application", "photoIds": vehicle_photo_ids}, token=cust)
 app_id = application.get("id") if s == 201 else None
 check("customer submits vehicle application", s == 201 and app_id, f"{s} {application}")
 s, b = req("GET", "/api/live", token=cust)
@@ -246,6 +255,8 @@ s, b = req("GET", f"/api/applications/{app_id}", token=cust2)
 check("another customer cannot open application", s == 403, f"{s} {b}")
 s, b = req("GET", f"/api/applications/{app_id}", token=admin)
 check("admin opens application", s == 200 and b.get("id") == app_id, f"{s} {b}")
+for vehicle_doc_id in vehicle_photo_ids:
+    req("POST", f"/api/documents/{vehicle_doc_id}/review", {"status": "Verified"}, token=admin)
 s, b = req("GET", "/api/live", token=admin)
 check("application alert links to exact application", s == 200 and any(n.get("link") == f"application/{app_id}" for n in b.get("notifications", [])), f"{s} {b.get('notifications')}")
 

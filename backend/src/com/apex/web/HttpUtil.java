@@ -32,6 +32,17 @@ public final class HttpUtil {
         sendJson(ex, status, o);
     }
 
+    public static void sendBytes(HttpExchange ex, int status, String contentType, byte[] body,
+                                 String cacheControl) throws IOException {
+        byte[] bytes = body == null ? new byte[0] : body;
+        ex.getResponseHeaders().set("Content-Type", contentType == null ? "application/octet-stream" : contentType);
+        ex.getResponseHeaders().set("Cache-Control", cacheControl == null ? "no-store" : cacheControl);
+        ex.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+        ex.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
+    }
+
     public static Map<String, String> query(HttpExchange ex) {
         Map<String, String> m = new HashMap<>();
         String q = ex.getRequestURI().getRawQuery();
