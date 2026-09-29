@@ -398,10 +398,15 @@ s, b = req("POST", f"/api/reviews/{rid}/review", {"status": "Approved"}, token=a
 check("approve review", s == 200, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
 check("public shows approved", s == 200 and len(b) == 1 and b[0].get("rating") == 5, f"{s} {b}")
+s, b = req("GET", "/api/reviews/featured")
+check("featured includes approved review with reviewer/car names", s == 200 and
+      any(r.get("id") == rid and r.get("reviewerName") and r.get("carName") for r in b), f"{s} {b}")
 s, b = req("POST", f"/api/reviews/{rid}/review", {"status": "Hidden"}, token=admin)
 check("hide review", s == 200, f"{s}")
 s, b = req("GET", f"/api/reviews/car/{car_id}")
 check("public hides hidden", s == 200 and len(b) == 0, f"{s}")
+s, b = req("GET", "/api/reviews/featured")
+check("featured excludes hidden review", s == 200 and all(r.get("id") != rid for r in b), f"{s} {b}")
 
 print("== 12. Chat ==")
 s, t = req("POST", "/api/chats/send", {"text": "Hello, when is my car ready?", "from": "user"}, cust)

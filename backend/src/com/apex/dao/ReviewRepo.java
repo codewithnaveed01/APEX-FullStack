@@ -41,6 +41,32 @@ public final class ReviewRepo {
         return out;
     }
 
+    /** Latest approved reviews across every car - used for the public homepage. */
+    public List<JsonObject> approvedFeatured(int limit) {
+        return db.with(c -> approvedFeatured(c, limit));
+    }
+
+    public List<JsonObject> approvedFeatured(PgConnection c, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 50));
+        QueryResult r = c.query("SELECT r.id, r.booking_id, r.car_id, r.user_id, r.rating, r.body," +
+                " r.status, r.created_at, u.name AS reviewer_name, car.name AS car_name" +
+                " FROM reviews r" +
+                " LEFT JOIN users u ON u.id = r.user_id" +
+                " LEFT JOIN cars car ON car.id = r.car_id" +
+                " WHERE r.status = 'Approved'" +
+                " ORDER BY r.rating DESC, r.created_at DESC LIMIT " + safeLimit, null);
+        List<JsonObject> out = new ArrayList<>();
+        for (int i = 0; i < r.rowCount(); i++) {
+            JsonObject o = toJson(r, i);
+            String reviewerName = r.col("reviewer_name", i);
+            String carName = r.col("car_name", i);
+            o.addProperty("reviewerName", reviewerName == null || reviewerName.isBlank() ? "APEX customer" : reviewerName);
+            o.addProperty("carName", carName == null || carName.isBlank() ? ("Car #" + o.get("carId").getAsLong()) : carName);
+            out.add(o);
+        }
+        return out;
+    }
+
     public JsonObject get(PgConnection c, long id) {
         QueryResult r = c.query("SELECT id, booking_id, car_id, user_id, rating, body, status, created_at" +
                 " FROM reviews WHERE id = $1", new String[]{String.valueOf(id)});
