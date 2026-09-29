@@ -27,6 +27,7 @@ public final class App {
     public final DocumentRepo documents;
     public final ReviewRepo reviews;
     public final OwnerRepo owners;
+    public final DriverPayoutRepo driverPayouts;
 
     public final AuthService auth;
     public final NotificationService notifications;
@@ -37,6 +38,7 @@ public final class App {
     public final StateService stateService;
     public final SeedService seedService;
     public final OwnerVehicleService ownerVehicleService;
+    public final DriverPayoutService driverPayoutService;
 
     public App(AppConfig cfg, Database db) {
         this.cfg = cfg;
@@ -56,7 +58,9 @@ public final class App {
         payments = new PaymentRepo(db);
         documents = new DocumentRepo(db);
         reviews = new ReviewRepo(db);
-        owners = new OwnerRepo(db, new PayoutCrypto(cfg.payoutEncryptionKey));
+        PayoutCrypto payoutCrypto = new PayoutCrypto(cfg.payoutEncryptionKey);
+        owners = new OwnerRepo(db, payoutCrypto);
+        driverPayouts = new DriverPayoutRepo(db, payoutCrypto);
 
         auth = new AuthService(db, users, sessions, cfg.sessionHours);
         notifications = new NotificationService(notifs);
@@ -66,6 +70,7 @@ public final class App {
         statsService = new StatsService(db, bookings, cars, drivers, users, payments, documents, reviews, wallet, apps, chats);
         stateService = new StateService(db, cars, drivers, users, bookings, apps, notifs, chats, bans, settings, wallet);
         ownerVehicleService = new OwnerVehicleService(db, apps, cars, documents, bans, notifications, owners);
+        driverPayoutService = new DriverPayoutService(db, bookings, drivers, driverPayouts, wallet);
         seedService = new SeedService(db, users, cars, drivers, bookings, reviews, settings, cfg);
     }
 

@@ -29,13 +29,17 @@ public final class DbProtocolTest {
             check("1".equals(db.with(c -> c.query(
                     "SELECT count(*) FROM schema_migrations WHERE name = $1",
                     new String[]{"001_init.sql"})).first()), "001_init.sql was not applied exactly once");
+            check("1".equals(db.with(c -> c.query(
+                    "SELECT count(*) FROM schema_migrations WHERE name = $1",
+                    new String[]{"007_contextual_verification_driver_payouts.sql"})).first()),
+                    "007_contextual_verification_driver_payouts.sql was not applied exactly once");
 
             Set<String> expected = Set.of("users", "sessions", "cars", "drivers", "bookings",
                     "booking_items", "owner_applications", "notifications", "chat_threads",
                     "chat_messages", "banned_cnic", "wallet", "owner_wallets",
                     "wallet_transactions", "documents", "payments", "reviews", "app_settings",
                     "vehicle_application_images", "owner_application_history", "owner_payout_accounts",
-                    "owner_payout_ledger", "owner_car_deletions");
+                    "owner_payout_ledger", "owner_car_deletions", "driver_payout_accounts", "driver_payouts");
             QueryResult tables = db.with(c -> c.query(
                     "SELECT table_name FROM information_schema.tables " +
                     "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'",

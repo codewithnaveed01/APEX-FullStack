@@ -68,6 +68,21 @@ public final class DocumentRepo {
         return r.rowCount() > 0;
     }
 
+    /** Receipt ownership and lifecycle check shared by submission and review. */
+    public boolean isOwnedPendingReceipt(PgConnection c, long id, String userId) {
+        QueryResult r = c.query("SELECT 1 FROM documents d WHERE d.id=$1 AND d.owner_type='user'" +
+                        " AND d.owner_id=$2 AND d.kind='receipt' AND d.status='Pending'",
+                new String[]{String.valueOf(id), userId});
+        return r.rowCount() > 0;
+    }
+
+    /** A new receipt must additionally not be linked to a previous payment. */
+    public boolean isDedicatedPendingReceipt(PgConnection c, long id, String userId) {
+        if (!isOwnedPendingReceipt(c, id, userId)) return false;
+        QueryResult r = c.query("SELECT 1 FROM payments WHERE receipt_doc=$1", new String[]{String.valueOf(id)});
+        return r.rowCount() == 0;
+    }
+
     /** A vehicle photo may only be attached by the user who uploaded it. */
     public boolean isOwnedVehiclePhoto(PgConnection c, long id, String ownerId) {
         QueryResult r = c.query("SELECT 1 FROM documents WHERE id = $1 AND owner_type = 'user'" +

@@ -217,12 +217,14 @@ function toggleAdminSiteInbox(){
   else button?.focus();
 }
 function openAdminMessages(){
-  adminInboxExpanded=true;
+  // Header icon is the sole desktop/mobile drawer control; no persistent
+  // support sidebar steals dashboard width.
+  adminInboxExpanded=!adminInboxExpanded;
   const shell=document.querySelector('.admin-inbox-shell');
-  shell?.classList.add('expanded');
-  paintAdminInbox();
-  shell?.scrollIntoView({block:'nearest'});
-  shell?.querySelector('.inbox-toggle')?.focus();
+  shell?.classList.toggle('expanded',adminInboxExpanded);
+  shell?.setAttribute('aria-hidden',String(!adminInboxExpanded));
+  if(adminInboxExpanded){paintAdminInbox();shell?.querySelector('.inbox-toggle')?.focus();}
+  else document.getElementById('admin-message-btn')?.focus();
 }
 function chatWidget(){
   if(account?.id==='admin'){
@@ -590,13 +592,36 @@ function reviewCheckout(e){e.preventDefault();const f=Object.fromEntries(new For
 function paymentForm(){return `<h2 class="formtitle">Payment</h2><p class="small muted">${esc(checkoutInfo.name)} · ${cart.length} vehicles · ${esc(checkoutInfo.pickupMode||'Office pickup')}</p><button class="text-btn" onclick="checkoutStep=1;render()">← Edit details</button><form onsubmit="submitOrder(event)" style="margin-top:18px"><div class="payment-options">${[['Cash on pickup','Pay at '+esc(config.officeAddress),'◈'],['JazzCash','Send to '+esc(config.jazzCashNumber)+' — APEX Rentals','J'],['easypaisa','Send to '+esc(config.easypaisaNumber)+' — APEX Rentals','e'],['Raast / bank transfer','Bank: '+esc(config.bankAccount)+' | IBAN: '+esc(config.bankIBAN)+' | Raast: '+esc(config.raastId),'↗'],['Visa / Mastercard','Secure card — 2.5% fee','▣']].map(([p,s,ic])=>`<label class="pay"><input type="radio" name="payment" value="${p}" ${payment===p?'checked':''} onchange="choosePayment(this.value)"><span><b>${ic}  ${p}</b><small>${s}</small></span></label>`).join('')}</div><div class="notice" id="payment-note" style="background:#fffbe6;border-color:#f5e6a0;color:#7a5a00"></div><div class="panel" style="margin:16px 0;background:var(--bg-2)"><small style="font-weight:700">OFFICE ADDRESS FOR PICKUP</small><p style="font-size:11px;margin:8px 0 0;color:var(--text)">${esc(config.officeAddress)}<br>Phone: ${esc(config.companyPhone)}<br>${checkoutInfo.pickupMode==='Home delivery'?'<b>Home delivery: +'+money(config.homeDeliveryCharge)+'</b><br>Address: '+esc(checkoutInfo.homeAddress||''):''}</p></div><label class="check"><input required type="checkbox"><span>I confirm ${money(totals().rental)} rental ${totals().deposit?'+ '+money(totals().deposit)+' refundable (self-drive only)':''} ${checkoutInfo.pickupMode==='Home delivery'?'+ '+money(config.homeDeliveryCharge)+' home delivery':''}.</span></label><button class="btn full">Confirm booking ↗</button></form>`}
 function choosePayment(v){payment=v;paymentNote()}
 function paymentNote(){const el=document.getElementById('payment-note');if(!el) return; if(payment==='Cash on pickup'){el.innerHTML=`Cash on pickup: Pay at office<br><b>${esc(config.officeAddress)}</b><br>Admin will manually add to wallet for revenue.`}else if(payment==='JazzCash'){el.innerHTML=`JazzCash: Send <b>${money(totals().total)}</b> to <b>${esc(config.jazzCashNumber)}</b> (APEX Rentals)<br>After payment, share TID in chat. Money goes to admin wallet.`}else if(payment==='easypaisa'){el.innerHTML=`Easypaisa: Send <b>${money(totals().total)}</b> to <b>${esc(config.easypaisaNumber)}</b><br>Money to admin wallet first, then 90% to owner.`}else if(payment.includes('Raast')||payment.includes('bank')){el.innerHTML=`Bank: <b>${esc(config.bankAccount)}</b><br>IBAN: <b>${esc(config.bankIBAN)}</b><br>Raast: <b>${esc(config.raastId)}</b><br>Amount ${money(totals().total)} to admin wallet.`}else{el.innerHTML=`${esc(payment)}: Secure checkout<br>Amount ${money(totals().total)} to admin wallet. Owner gets 90% after ride complete, 10% company.`}}
-function submitOrder(e){e.preventDefault();payment=new FormData(e.target).get('payment')||payment;const id='VR-'+Date.now().toString().slice(-7);if(bannedCNICs.includes(checkoutInfo.identity)){toast('This CNIC is banned from services'); return;} let homeCharge=checkoutInfo.pickupMode==='Home delivery'?config.homeDeliveryCharge:0; let baseTotals=totals(); let finalTotals={...baseTotals, homeDelivery:homeCharge, total:baseTotals.total+homeCharge}; let o={id,userId:account.id,name:checkoutInfo.name,email:account.email,phone:checkoutInfo.phone,destination:checkoutInfo.destination,pickupMode:checkoutInfo.pickupMode||'Office pickup',homeAddress:checkoutInfo.homeAddress||'',officeAddress:config.officeAddress,identityType:checkoutInfo.idType,identity:checkoutInfo.identity,identityMasked:checkoutInfo.idType==='CNIC'?'xxxxx-xxxxxxx-x':'xxxxxxxx',identityStatus:'Verified',items:cart.map((i,n)=>({...i,price:quote(i),assignedDriver:null,selfDriver:i.service==='Self-drive'?{name:checkoutInfo['driverName_'+n],license:checkoutInfo['license_'+n],status:'Verified'}:null})),totals:finalTotals,payment,status:'Confirmed',paid:0,depositPaid:0,created:new Date().toISOString(),cancellationFee:0,ownerPayoutDone:false};orders.unshift(o);cart=[]; if(payment!=='Cash on pickup'){const payAmount=finalTotals.rental+homeCharge+(finalTotals.deposit||0);adminWallet+=payAmount;apexRecordPayment(payAmount,'payment',id+' · '+payment);} persist();addNotification(account.id,'Booking confirmed','Your booking '+id+' for '+o.items.length+' vehicle(s) is confirmed. Total '+money(finalTotals.total)+' — Pickup: '+o.pickupMode,'account');addNotification('admin','New booking '+id+' — '+money(finalTotals.total)+' to admin wallet',account.username+' booked '+o.items.length+' vehicle(s) via '+payment+' — '+o.pickupMode,null,'Reservations');go('success/'+id);}
+async function submitOrder(e){
+  e.preventDefault();payment=new FormData(e.target).get('payment')||payment;
+  if(!v3Online()||!__apexToken||!account)return toast('Please sign in to the APEX server before booking.');
+  if(bannedCNICs.includes(checkoutInfo.identity))return toast('This CNIC is banned from services');
+  const docs=window.__v3Docs||{};
+  if(!docs.cnic_front||!docs.cnic_back)return toast('CNIC front and back photos are required.');
+  if(payment!=='Cash on pickup'&&(!docs.receipt||(e.target.elements.tid?.value||'').trim().length<4))return toast('Online payment needs a receipt and transaction ID.');
+  const button=e.target.querySelector('button[type="submit"]');if(button){button.disabled=true;button.textContent='Saving booking…';}
+  try{
+    const [front,back]=await Promise.all([v3Upload(docs.cnic_front,'cnic_front','user',account.id),v3Upload(docs.cnic_back,'cnic_back','user',account.id)]);
+    const body={name:checkoutInfo.name,email:checkoutInfo.email||account.email,phone:checkoutInfo.phone,destination:checkoutInfo.destination,
+      pickupMode:checkoutInfo.pickupMode||'Office pickup',homeAddress:checkoutInfo.homeAddress||'',officeAddress:config.officeAddress,
+      identityType:checkoutInfo.idType||'CNIC',identity:checkoutInfo.identity,identityDocs:[front.id,back.id],payment,
+      items:cart.map(i=>({carId:i.carId,start:i.start,end:i.end,startDt:v3ItemStart(i),endDt:v3ItemEnd(i),city:i.city,service:i.service}))};
+    const booking=await v3Api('/api/orders',{method:'POST',body:JSON.stringify(body)});
+    if(payment!=='Cash on pickup'){
+      const receipt=await v3Upload(docs.receipt,'receipt','user',account.id);
+      await v3Api('/api/payments/submit',{method:'POST',body:JSON.stringify({bookingId:booking.id,method,amount:booking.totals.total,tid:e.target.elements.tid.value.trim(),receiptDoc:receipt.id})});
+    }
+    cart=[];window.__v3Docs={};persist();await v3RefreshBootstrap();go('success/'+booking.id);
+    toast(payment==='Cash on pickup'?'Booking received — payment due at pickup.':'Receipt submitted — pending admin verification.');
+  }catch(err){toast('Booking was not submitted: '+err.message);}
+  finally{if(button){button.disabled=false;button.textContent='Confirm booking ↗';}}
+}
 function successPage(id){const o=orders.find(o=>o.id===id&&o.userId===account?.id);if(!o)return empty('Reservation not found.','Check My journeys.','My journeys','account');return `<div class="wrap" style="max-width:800px"><div class="empty" style="padding-bottom:20px"><div class="success-symbol">✓</div><div class="eyebrow">BOOKING CONFIRMED</div><h2>Your APEX journey is confirmed!</h2><p>Reservation ${o.id} · ${o.items.length} vehicle(s) · Total ${money(o.totals.total)}</p></div><div class="panel depth-layer">${orderItems(o)}${priceLines(o.totals)}<div class="button-row"><button class="btn ghost" onclick="go('fleet')">Explore more</button><button class="btn" onclick="go('account')">My journeys ↗</button></div></div></div>`}
 function orderItems(o){return o.items.map(i=>`<div class="cart-item"><img src="${photo(carBy(i.carId).image)}" alt=""><div><h3>${esc(carBy(i.carId).name)}</h3><p>${date(i.start)} — ${date(i.end)}</p><p>${esc(i.service)} · ${esc(i.city)}</p>${i.service==='With driver'?`<p>${i.assignedDriver?'Chauffeur: '+esc(drivers.find(d=>d.id===i.assignedDriver)?.name||'Assigned'):'Chauffeur pending'}</p>`:''}</div><strong class="small">${money(i.price.rental)}</strong></div>`).join('')}
 function accountPage(){
   if(!account)return `<div class="wrap empty"><h2>Your APEX account</h2><p class="muted">Sign in to see your bookings.</p><button class="btn" onclick="auth(false)">Sign in ↗</button></div>`;
   const mine=orders.filter(o=>o.userId===account.id),apps=applications.filter(a=>a.userId===account.id),mineNotifs=notifications.filter(n=>n.userId===account.id).slice(0,6);
-  return `<div class="wrap"><div class="page-top"><div class="eyebrow">YOUR APEX SPACE · @${esc(account.username)}</div><div class="section-head"><div><h1>Hello, ${esc(account.name.split(' ')[0])}.</h1><p>${esc(account.email)} · ${esc(account.phone)}</p></div><button class="btn ghost" onclick="signout()">Sign out</button></div></div>${mineNotifs.length?`<div class="panel depth-layer" style="margin-bottom:20px"><h3 style="font-size:14px;margin-bottom:12px">Recent notifications</h3>${mineNotifs.map(n=>`<div class="notif-item"><span class="dot" style="background:${n.title.includes('confirmed')?'var(--lime)':'#6b7f5a'}"></span><div><b>${esc(n.title)}</b><p>${esc(n.msg)}</p></div></div>`).join('')}</div>`:''}${mine.length?mine.map(o=>`<div class="panel mybooking depth-layer"><div class="booking-top"><h3>${o.id}</h3><span class="pill">${o.status}</span></div>${orderItems(o)}<div class="line"><span>Total, including deposit</span><strong>${money(o.totals.total)}</strong></div><div class="button-row"><button class="btn ghost" onclick="cancelOrder('${o.id}')">Cancel</button><button class="btn ghost" onclick="receipt('${o.id}')">Receipt ↗</button></div></div>`).join(''):'<div class="panel empty depth-layer"><h2>No reservations yet.</h2><button class="btn" onclick="go(\'fleet\')">Explore cars ↗</button></div>'}${apps.length?`<div class="section"><h2>Your vehicle applications</h2>${apps.map(a=>`<div class="panel mybooking depth-layer"><div class="booking-top"><h3>${esc(a.brand+' '+a.model)} · ${a.year}</h3><span class="pill">${a.status}</span></div><p class="small muted">${a.id} · ${esc(a.city)}</p>${a.note?`<div class="notice">${esc(a.note)}</div>`:''}</div>`).join('')}</div>`:''}</div>`;
+  return `<div class="wrap"><div class="page-top"><div class="eyebrow">YOUR APEX SPACE · @${esc(account.username)}</div><div class="section-head"><div><h1>Hello, ${esc(account.name.split(' ')[0])}.</h1><p>${esc(account.email)} · ${esc(account.phone)}</p></div><button class="btn ghost" onclick="signout()">Sign out</button></div></div>${mineNotifs.length?`<div class="panel depth-layer" style="margin-bottom:20px"><h3 style="font-size:14px;margin-bottom:12px">Recent notifications</h3>${mineNotifs.map(n=>`<div class="notif-item"><span class="dot" style="background:${n.title.includes('confirmed')?'var(--lime)':'#6b7f5a'}"></span><div><b>${esc(n.title)}</b><p>${esc(n.msg)}</p></div></div>`).join('')}</div>`:''}${mine.length?mine.map(o=>`<div class="panel mybooking depth-layer"><div class="booking-top"><h3>${o.id}</h3><span class="pill">${o.status}</span></div>${orderItems(o)}<div class="line"><span>Total, including deposit</span><strong>${money(o.totals.total)}</strong></div><div class="button-row">${['Confirmed','Pending Verification','Pickup Pending'].includes(o.status)?`<button class="btn ghost" onclick="cancelOrder('${o.id}')">Cancel</button>`:''}<button class="btn ghost" onclick="receipt('${o.id}')">Receipt ↗</button></div></div>`).join(''):'<div class="panel empty depth-layer"><h2>No reservations yet.</h2><button class="btn" onclick="go(\'fleet\')">Explore cars ↗</button></div>'}${apps.length?`<div class="section"><h2>Your vehicle applications</h2>${apps.map(a=>`<div class="panel mybooking depth-layer"><div class="booking-top"><h3>${esc(a.brand+' '+a.model)} · ${a.year}</h3><span class="pill">${a.status}</span></div><p class="small muted">${a.id} · ${esc(a.city)}</p>${a.note?`<div class="notice">${esc(a.note)}</div>`:''}</div>`).join('')}</div>`:''}</div>`;
 }
 function signout(){
   if(v3Online()&&__apexToken)fetch('/api/auth/logout',{method:'POST',headers:apexHeaders(false)}).catch(()=>{});
@@ -828,9 +853,9 @@ function adminShell(){
 }
 
 function adminSearch(v){adminQuery=v;document.getElementById('admin-bookings').innerHTML=adminBookings(orders.filter(o=>(o.id+' '+o.name+' '+o.email).toLowerCase().includes(v.toLowerCase())))}
-function adminBookings(list){return `<div class="panel table-scroll depth-layer"><table><thead><tr><th>Reservation</th><th>Customer</th><th>Vehicles</th><th>Rental</th><th>Status</th><th>Payment</th><th></th></tr></thead><tbody>${list.map(o=>`<tr><td>${o.id}<small>${new Date(o.created).toLocaleDateString('en-GB')}</small></td><td>${esc(o.name)}<small>${esc(o.email)}</small></td><td>${o.items.length} vehicle(s)<small>${date(o.items[0].start)} — ${date(o.items[0].end)}</small></td><td>${money(o.totals.rental)}<small>Deposit ${money(o.totals.deposit)}</small></td><td><span class="pill">${o.status}</span></td><td>${o.paid>=o.totals.rental?'Paid':'Pending'}<small>${esc(o.payment)}</small></td><td><button class="btn dark" onclick="manageOrder('${o.id}')">Manage ↗</button></td></tr>`).join('')}</tbody></table>${!list.length?'<div class="empty"><h3>No reservations yet.</h3></div>':''}</div>`}
+function adminBookings(list){return `<div class="panel table-scroll depth-layer"><table><thead><tr><th>Reservation</th><th>Customer</th><th>Vehicles</th><th>Rental</th><th>Status</th><th>Payment</th><th></th></tr></thead><tbody>${list.map(o=>`<tr class="${(o.paymentStatus==='Pending Verification'||o.status==='Pending Verification')?'payment-pending':''}"><td>${o.id}<small>${new Date(o.created).toLocaleDateString('en-GB')}</small></td><td>${esc(o.name)}<small>${esc(o.email)}</small></td><td>${o.items.length} vehicle(s)<small>${date(o.items[0].start)} — ${date(o.items[0].end)}</small></td><td>${money(o.totals.rental)}<small>Deposit ${money(o.totals.deposit)}</small></td><td><span class="pill">${o.status}</span></td><td>${o.paymentStatus==='Pending Verification'?'<b class="payment-pending-label">⚠ Pending verification</b>':(o.paid>=o.totals.rental?'Paid':'Pending')}<small>${esc(o.payment)}</small></td><td><button class="btn dark" onclick="manageOrder('${o.id}')">Manage ↗</button></td></tr>`).join('')}</tbody></table>${!list.length?'<div class="empty"><h3>No reservations yet.</h3></div>':''}</div>`}
 function driverFree(d,start,end,exclude='',itemIndex=-1){return driverIsApproved(d)&&d.active&&!orders.some(o=>!['Cancelled','Completed'].includes(o.status)&&o.items.some((i,n)=>!(o.id===exclude&&n===itemIndex)&&i.assignedDriver===d.id&&start<i.end&&end>i.start))}
-function manageOrder(id){const o=orders.find(o=>o.id===id);modal('Reservation '+id,`<span class="pill">${o.status}</span><div class="info-grid">${[['Renter',o.name],['Phone',o.phone],['Email',o.email],['Verification',o.identityStatus],['Destination',o.destination]].map(([k,v])=>`<div class="info-box"><small>${k}</small><b>${esc(v)}</b></div>`).join('')}</div>${o.items.map((i,n)=>`<div class="panel" style="margin-bottom:15px"><h3 style="font-size:17px">${esc(carBy(i.carId).name)}</h3><p class="small muted">${date(i.start)} — ${date(i.end)} · ${esc(i.city)} · ${esc(i.service)}</p>${i.service==='With driver'?`<label>Assign chauffeur</label><select onchange="assignDriver('${id}',${n},this.value)"><option value="">Not assigned</option>${drivers.map(d=>{const free=driverFree(d,i.start,i.end,id,n);return `<option value="${d.id}" ${i.assignedDriver===d.id?'selected':''} ${!free?'disabled':''}>${esc(d.name)} · ${d.city} · ${free?'Available':'Busy'}</option>`}).join('')}</select>`:''}</div>`).join('')}${priceLines(o.totals)}<div class="button-row">${o.status==='Confirmed'?`<button class="btn" onclick="startOrder('${id}')">Start rental</button>`:''}${o.status==='Active'?`<button class="btn" onclick="completeOrder('${id}')">Complete rental</button>`:''}<button class="btn ghost" onclick="cancelOrder('${id}')">Cancel</button></div>`,true)}
+function manageOrder(id){const o=orders.find(o=>o.id===id);modal('Reservation '+id,`<span class="pill">${o.status}</span><div class="info-grid">${[['Renter',o.name],['Phone',o.phone],['Email',o.email],['Verification',o.identityStatus],['Destination',o.destination]].map(([k,v])=>`<div class="info-box"><small>${k}</small><b>${esc(v)}</b></div>`).join('')}</div>${o.items.map((i,n)=>`<div class="panel" style="margin-bottom:15px"><h3 style="font-size:17px">${esc(carBy(i.carId).name)}</h3><p class="small muted">${date(i.start)} — ${date(i.end)} · ${esc(i.city)} · ${esc(i.service)}</p>${i.service==='With driver'?`<label>Assign chauffeur</label><select onchange="assignDriver('${id}',${n},this.value)"><option value="">Not assigned</option>${drivers.map(d=>{const free=driverFree(d,i.start,i.end,id,n);return `<option value="${d.id}" ${i.assignedDriver===d.id?'selected':''} ${!free?'disabled':''}>${esc(d.name)} · ${d.city} · ${free?'Available':'Busy'}</option>`}).join('')}</select>`:''}</div>`).join('')}${priceLines(o.totals)}<div class="button-row">${o.status==='Confirmed'?`<button class="btn" onclick="startOrder('${id}')">Start rental</button>`:''}${o.status==='Active'?`<button class="btn" onclick="completeOrder('${id}')">Complete rental</button>`:''}${['Confirmed','Pending Verification','Pickup Pending'].includes(o.status)?`<button class="btn ghost" onclick="cancelOrder('${id}')">Cancel</button>`:''}</div>`,true)}
 function assignDriver(id,n,value){const o=orders.find(o=>o.id===id),i=o.items[n];i.assignedDriver=value?+value:null;persist();render();modal('Driver assigned','<p class="small muted">Chauffeur assigned to vehicle.</p><div class="button-row"><button class="btn" onclick="closeModal();manageOrder(\''+id+'\')">Back to order</button></div>');addNotification(o.userId,'Chauffeur assigned','Driver assigned to your booking '+id,'account');toast('Driver assigned')}
 function startOrder(id){const o=orders.find(o=>o.id===id);o.status='Active';persist();addNotification(o.userId,'Rental started','Your rental '+id+' is now active.','account');closeModal();render();toast('Rental started')}
 function completeOrder(id){const o=orders.find(o=>o.id===id);o.status='Completed'; let totalOwnerPayout=0; o.items.forEach(item=>{const car=carBy(item.carId); if(car && car.ownerId){const rental=item.price?item.price.rental:0; const ownerShare=Math.round(rental*0.90); const companyShare=rental-ownerShare; totalOwnerPayout+=ownerShare; if(!ownerWallets[car.ownerId]) ownerWallets[car.ownerId]=0; ownerWallets[car.ownerId]+=ownerShare; adminWallet-=ownerShare; addNotification(car.ownerId,'Ride completed — payout','Your car '+car.name+' ride '+id+' completed. You received '+money(ownerShare)+' (90%), company kept '+money(companyShare)+' (10%)','account');}}); if(totalOwnerPayout>0){addNotification('admin','Owner payout done — '+money(totalOwnerPayout),'For booking '+id+' distributed to owners',null,'Payments');} if(o.totals.deposit>0 && o.items.some(i=>i.service==='Self-drive')){addNotification(o.userId,'Deposit refund','Your refundable deposit '+money(o.totals.deposit)+' will be refunded within 7 days after inspection','account');} o.ownerPayoutDone=true; persist();closeModal();render();toast('Completed — '+(totalOwnerPayout?money(totalOwnerPayout)+' to owners, 10% company':'Company revenue'));}
@@ -883,7 +908,7 @@ function confirmDeleteFleet(id){fleet=fleet.filter(c=>c.id!==+id);persist();clos
 function driverIsApproved(d){return ['approved','active'].includes(String(d?.status||'').toLowerCase())}
 function adminDrivers(){
   const pending=drivers.filter(d=>!driverIsApproved(d));
-  return `<div class="section-head"><div><h2 style="font-size:23px">Drivers</h2><p class="small muted">${drivers.filter(driverIsApproved).length} approved · ${pending.length} pending</p></div><div class="button-row">${pending.length?`<button class="btn ghost" onclick="approveAllPendingDrivers()">Approve all pending</button>`:''}<button class="btn" onclick="driverForm()">+ Add driver</button></div></div><div class="driver-grid">${drivers.map(d=>`<div class="panel driver-card depth-layer"><div class="driver-avatar">${initials(d.name)}</div><h3>${esc(d.name)}</h3><span class="pill">${driverIsApproved(d)?'Approved':'Pending approval'}</span><p>${esc(d.city)} · ${d.experience}y · ${esc(d.phone)}<br>Licence: ${esc(d.license)}</p><div class="button-row" style="justify-content:flex-start;margin-top:10px"><button class="btn ghost" onclick="editDriver(${d.id})">Edit / documents</button>${!driverIsApproved(d)?`<button class="btn" onclick="approveDriver(${d.id})">Approve</button>`:''}<button class="btn ghost" onclick="toggleDriver(${d.id})">${d.active?'Turn off':'Turn on'}</button><button class="btn ghost" onclick="deleteDriver(${d.id})">Delete</button></div></div>`).join('')}</div>`
+  return `<div class="section-head"><div><h2 style="font-size:23px">Drivers</h2><p class="small muted">${drivers.filter(driverIsApproved).length} approved · ${pending.length} pending</p></div><div class="button-row">${pending.length?`<button class="btn ghost" onclick="approveAllPendingDrivers()">Approve all pending</button>`:''}<button class="btn" onclick="driverForm()">+ Add driver</button></div></div><div class="driver-grid">${drivers.map(d=>`<div class="panel driver-card depth-layer"><div class="driver-avatar">${initials(d.name)}</div><h3>${esc(d.name)}</h3><span class="pill">${driverIsApproved(d)?'Approved':'Pending approval'}</span><p>${esc(d.city)} · ${d.experience}y · ${esc(d.phone)}<br>Licence: ${esc(d.license)}</p><div class="button-row" style="justify-content:flex-start;margin-top:10px"><button class="btn ghost" onclick="editDriver(${d.id})">Edit / documents</button><button class="btn ghost" onclick="v3DriverPayoutAccount(${d.id})">Payout account</button><button class="btn ghost" onclick="v3DriverPayoutHistory(${d.id})">Payout history</button>${!driverIsApproved(d)?`<button class="btn" onclick="approveDriver(${d.id})">Approve</button>`:''}<button class="btn ghost" onclick="toggleDriver(${d.id})">${d.active?'Turn off':'Turn on'}</button><button class="btn ghost" onclick="deleteDriver(${d.id})">Delete</button></div></div>`).join('')}</div>`
 }
 async function approveDriver(id,quiet=false){
   const d=drivers.find(x=>x.id===+id);if(!d)return false;
@@ -919,7 +944,7 @@ async function viewApplicationPhotos(id){
   try{
     const docs=await Promise.all(a.photoIds.map(docId=>v3Api('/api/documents/'+encodeURIComponent(docId))));
     const labels=['Main / exterior','Interior','Detail / engine'],box=document.getElementById('application-photos');
-    if(box)box.innerHTML=docs.map((doc,index)=>`<figure><img src="${doc.dataUrl}" alt="${labels[index]||'Vehicle photo'}"><figcaption>${index+1}. ${labels[index]||'Vehicle photo'} · ${esc(doc.status||'Pending')}</figcaption></figure>`).join('');
+    if(box)box.innerHTML=docs.map((doc,index)=>`<figure><img src="${doc.dataUrl}" alt="${labels[index]||'Vehicle photo'}"><figcaption>${index+1}. ${labels[index]||'Vehicle photo'} · ${esc(doc.status||'Pending')} ${isAdmin?`<button type="button" class="btn ghost" style="margin-top:6px" onclick="v3ViewDoc(${a.photoIds[index]},'application','${esc(id)}')">Review photo</button>`:''}</figcaption></figure>`).join('');
   }catch(err){const box=document.getElementById('application-photos');if(box)box.textContent='Photos unavailable: '+err.message;}
 }
 async function updateApplication(e,id){
@@ -1231,46 +1256,29 @@ function paymentNote(){const el=document.getElementById('payment-note');const of
 
 /* ---------- order submission: uploads + server persistence + verification flow ---------- */
 async function submitOrder(e){
-  e.preventDefault();
-  const fd=new FormData(e.target);payment=fd.get('payment')||payment;
+  e.preventDefault();payment=new FormData(e.target).get('payment')||payment;
+  if(!v3Online()||!__apexToken||!account)return toast('Please sign in to the APEX server before booking.');
   if(bannedCNICs.includes(checkoutInfo.identity))return toast('This CNIC is banned from services');
-  const online=payment!=='Cash on pickup';
-  const tid=online?String(fd.get('tid')||'').trim():'';
-  const D=window.__v3Docs||{};
-  if(!D.cnic_front||!D.cnic_back)return toast('CNIC front & back pictures are required — go back and attach them.');
-  if(online&&tid.length<4)return toast('Transaction ID (TID) is required for online payments.');
-  if(online&&!D.receipt)return toast('Payment receipt picture is required.');
-  const btn=e.target.querySelector('button.full');if(btn){btn.disabled=true;btn.textContent='Uploading & booking…'}
+  const docs=window.__v3Docs||{};
+  if(!docs.cnic_front||!docs.cnic_back)return toast('CNIC front and back photos are required.');
+  if(payment!=='Cash on pickup'&&(!docs.receipt||(e.target.elements.tid?.value||'').trim().length<4))return toast('Online payment needs a receipt and transaction ID.');
+  const button=e.target.querySelector('button[type="submit"]');if(button){button.disabled=true;button.textContent='Saving booking…';}
   try{
-    const idF=await v3Upload(D.cnic_front,'cnic_front');
-    const idB=await v3Upload(D.cnic_back,'cnic_back');
-    let receiptDoc=null;
-    if(online)receiptDoc=(await v3Upload(D.receipt,'receipt','booking','pending')).id;
-    const id='VR-'+Date.now().toString().slice(-7);
-    const homeCharge=checkoutInfo.pickupMode==='Home delivery'?config.homeDeliveryCharge:0;
-    const baseTotals=totals();
-    const finalTotals={...baseTotals,homeDelivery:homeCharge,total:baseTotals.total+homeCharge};
-    const items=cart.map((i,n)=>({...i,price:quote(i),assignedDriver:null,startDt:i.startDt||(i.start+'T'+(i.startTime||'09:00')),endDt:i.endDt||(i.end+'T'+(i.endTime||'09:00')),selfDriver:i.service==='Self-drive'?{name:checkoutInfo['driverName_'+n],license:checkoutInfo['license_'+n],status:'Verified'}:null}));
-    const o={id,userId:account.id,name:checkoutInfo.name,email:account.email,phone:checkoutInfo.phone,destination:checkoutInfo.destination,pickupMode:checkoutInfo.pickupMode||'Office pickup',homeAddress:checkoutInfo.homeAddress||'',officeAddress:config.officeAddress,identityType:checkoutInfo.idType,identity:checkoutInfo.identity,identityMasked:checkoutInfo.idType==='CNIC'?'xxxxx-xxxxxxx-x':'xxxxxxxx',identityStatus:'Documents uploaded',identityDocs:[idF.id,idB.id],receiptDoc,tid,items,totals:finalTotals,payment,status:online?'Pending Verification':'Pickup Pending',paymentStatus:online?'Pending Verification':'Pay at pickup',startDt:items[0].startDt,endDt:items[0].endDt,paid:0,depositPaid:0,created:new Date().toISOString(),cancellationFee:0,ownerPayoutDone:false};
-    if(v3Online()){
-      await v3Api('/api/orders',{method:'POST',body:JSON.stringify(o)});   // server-side clash check
-      if(online){
-        const payAmount=finalTotals.rental+homeCharge+(finalTotals.deposit||0);
-        await v3Api('/api/payments/submit',{method:'POST',body:JSON.stringify({bookingId:id,method:payment,amount:payAmount,tid,receiptDoc})});
-      }
+    const [front,back]=await Promise.all([v3Upload(docs.cnic_front,'cnic_front','user',account.id),v3Upload(docs.cnic_back,'cnic_back','user',account.id)]);
+    const body={name:checkoutInfo.name,email:checkoutInfo.email||account.email,phone:checkoutInfo.phone,destination:checkoutInfo.destination,
+      pickupMode:checkoutInfo.pickupMode||'Office pickup',homeAddress:checkoutInfo.homeAddress||'',officeAddress:config.officeAddress,
+      identityType:checkoutInfo.idType||'CNIC',identity:checkoutInfo.identity,identityDocs:[front.id,back.id],payment,
+      items:cart.map(i=>({carId:i.carId,start:i.start,end:i.end,startDt:v3ItemStart(i),endDt:v3ItemEnd(i),city:i.city,service:i.service}))};
+    const booking=await v3Api('/api/orders',{method:'POST',body:JSON.stringify(body)});
+    if(payment!=='Cash on pickup'){
+      const receipt=await v3Upload(docs.receipt,'receipt','user',account.id);
+      await v3Api('/api/payments/submit',{method:'POST',body:JSON.stringify({bookingId:booking.id,method:payment,amount:booking.totals.total,tid:e.target.elements.tid.value.trim(),receiptDoc:receipt.id})});
     }
-    orders.unshift(o);cart=[];window.__v3Docs={};
-    persist();
-    addNotification(account.id,online?'Booking created — payment pending verification':'Booking created — pickup pending',
-      online?'Booking '+id+' ('+money(finalTotals.total)+') is waiting for admin payment verification.':'Booking '+id+' ('+money(finalTotals.total)+') — pay at pickup, admin will confirm handover.','account');
-    addNotification('admin','New booking '+id+' — '+money(finalTotals.total),account.username+' booked '+o.items.length+' vehicle(s) via '+payment+' — '+o.pickupMode,null,'Reservations');
-    go('success/'+id);
-  }catch(err){
-    if(btn){btn.disabled=false;btn.textContent='Confirm booking ↗'}
-    toast('Booking failed: '+err.message);
-  }
+    cart=[];window.__v3Docs={};persist();await v3RefreshBootstrap();go('success/'+booking.id);
+    toast(payment==='Cash on pickup'?'Booking received — payment due at pickup.':'Receipt submitted — pending admin verification.');
+  }catch(err){toast('Booking was not submitted: '+err.message);}
+  finally{if(button){button.disabled=false;button.textContent='Confirm booking ↗';}}
 }
-
 function successPage(id){const o=orders.find(o=>o.id===id&&o.userId===account?.id);if(!o)return empty('Reservation not found.','Check My journeys.','My journeys','account');
   const pay=o.paymentStatus||'';
   const banner=pay==='Pending Verification'?`<div class="notice" style="background:#fffbe6;border-color:#f5e6a0;color:#7a5a00">⏳ <b>Pending Verification</b> — admin is verifying your receipt + TID. You will be notified. Pickup is confirmed only after verification.</div>`
@@ -1716,7 +1724,7 @@ function adminOverview(){
     </div>
     <div class="chart-grid">
       <div class="chart-panel depth-layer"><h3>Recent activity · History</h3><div class="timeline">${orders.slice(0,8).map(o=>`<div class="timeline-item"><b>${o.id} · ${esc(o.name)} — ${o.status}</b><p>${o.items.map(i=>carBy(i.carId)?.name||'Car').join(', ')} · ${money(o.totals.total)} · ${esc(o.payment)}</p><small>${new Date(o.created).toLocaleString()}</small></div>`).join('')||'<p class="small muted">No activity yet</p>'}</div></div>
-      <div class="chart-panel depth-layer"><h3>Manage</h3><div style="display:grid;gap:10px;margin-top:12px"><button class="btn full" onclick="goAdminTab('Payments')">Payment verifications ↗</button><button class="btn ghost full" onclick="v3ShowDocs()">Verify CNIC documents ↗</button><button class="btn ghost full" onclick="v3ShowReviews()">Moderate reviews ↗</button><button class="btn ghost full" onclick="goAdminTab('Fleet')">Edit fleet & pricing ↗</button><button class="btn ghost full" onclick="goAdminTab('Reservations')">Manage bookings</button><button class="btn ghost full" onclick="exportOrders()">Export CSV ↓</button></div><div style="margin-top:20px"><h3 style="font-size:13px">Summary</h3><div class="info-grid" style="grid-template-columns:1fr 1fr;margin-top:10px"><div class="info-box"><small>Drivers active</small><b>${drivers.filter(d=>d.active).length}/${drivers.length}</b></div><div class="info-box"><small>Pending apps</small><b>${applications.filter(a=>a.status==='Submitted').length}</b></div><div class="info-box"><small>Active rentals</small><b>${active.length}</b></div><div class="info-box"><small>Chats</small><b>${chats.length}</b></div></div></div></div>
+      <div class="chart-panel depth-layer"><h3>Manage</h3><div style="display:grid;gap:10px;margin-top:12px"><button class="btn full" onclick="goAdminTab('Payments')">Payment verifications ↗</button><button class="btn ghost full" onclick="v3ShowReviews()">Moderate reviews ↗</button><button class="btn ghost full" onclick="goAdminTab('Fleet')">Edit fleet & pricing ↗</button><button class="btn ghost full" onclick="goAdminTab('Reservations')">Manage bookings</button><button class="btn ghost full" onclick="exportOrders()">Export CSV ↓</button></div><div style="margin-top:20px"><h3 style="font-size:13px">Summary</h3><div class="info-grid" style="grid-template-columns:1fr 1fr;margin-top:10px"><div class="info-box"><small>Drivers active</small><b>${drivers.filter(d=>d.active).length}/${drivers.length}</b></div><div class="info-box"><small>Pending apps</small><b>${applications.filter(a=>a.status==='Submitted').length}</b></div><div class="info-box"><small>Active rentals</small><b>${active.length}</b></div><div class="info-box"><small>Chats</small><b>${chats.length}</b></div></div></div></div>
     </div>
     <div class="section-head"><div><h2 style="font-size:23px">Recent reservations</h2></div><button class="text-btn" onclick="goAdminTab('Reservations')">View all ↗</button></div>${adminBookings(orders.slice(0,6))}
   `;
@@ -1745,7 +1753,7 @@ async function v3FillPayments(){
   try{
     const list=await v3Api('/api/payments');
     if(!list.length){box.innerHTML='<h2 style="font-size:18px">Payment verifications</h2><p class="small muted">No online payments submitted yet.</p>';return;}
-    box.innerHTML=`<h2 style="font-size:18px">Payment verifications — receipt + TID</h2><div class="table-scroll" style="margin-top:10px"><table><thead><tr><th>Booking</th><th>Method</th><th>Amount</th><th>TID</th><th>Receipt</th><th>Status</th><th>Actions</th></tr></thead><tbody>${list.map(p=>`<tr><td>${esc(p.bookingId)}</td><td>${esc(p.method)}</td><td>${money(p.amount)}</td><td>${esc(p.tid||'')}</td><td>${p.receiptDoc?`<button class="btn ghost" onclick="v3ViewDoc(${p.receiptDoc})">View ↗</button>`:'—'}</td><td><span class="pill">${esc(p.status)}</span>${p.note?'<br><small>'+esc(p.note)+'</small>':''}</td><td>${p.status==='Pending Verification'?`<button class="btn dark" onclick="v3ReviewPayment(${p.id},'verify')">✔ Verify</button> <button class="btn ghost" onclick="v3ReviewPayment(${p.id},'reject')">✖ Reject</button> <button class="btn ghost" onclick="v3ReviewPayment(${p.id},'reupload')">↻ Re-upload</button>`:'—'}</td></tr>`).join('')}</tbody></table></div>`;
+    box.innerHTML=`<h2 style="font-size:18px">Payment verifications — receipt + TID</h2><div class="table-scroll" style="margin-top:10px"><table><thead><tr><th>Booking</th><th>Method</th><th>Amount</th><th>TID</th><th>Receipt</th><th>Status</th><th>Actions</th></tr></thead><tbody>${list.map(p=>`<tr><td>${esc(p.bookingId)}</td><td>${esc(p.method)}</td><td>${money(p.amount)}</td><td>${esc(p.tid||'')}</td><td>${p.receiptDoc?`<button class="btn ghost" onclick="v3ViewDoc(${p.receiptDoc},'reservation','${p.bookingId}')">View ↗</button>`:'—'}</td><td><span class="pill">${esc(p.status)}</span>${p.note?'<br><small>'+esc(p.note)+'</small>':''}</td><td>${p.status==='Pending Verification'?`<button class="btn dark" onclick="v3ReviewPayment(${p.id},'verify')">✔ Verify</button> <button class="btn ghost" onclick="v3ReviewPayment(${p.id},'reject')">✖ Reject</button> <button class="btn ghost" onclick="v3ReviewPayment(${p.id},'reupload')">↻ Re-upload</button>`:'—'}</td></tr>`).join('')}</tbody></table></div>`;
   }catch(e){box.innerHTML='<h2 style="font-size:18px">Payment verifications</h2><p class="small muted">Server offline.</p>'}
 }
 async function v3ReviewPayment(id,action){
@@ -1768,7 +1776,7 @@ async function v3SubmitReceipt(orderId){
   if(tid.length<4)return toast('TID is required (4+ characters)');
   if(!D.receipt2)return toast('Receipt picture is required');
   try{
-    const up=await v3Upload(D.receipt2,'receipt','booking',orderId);
+    const up=await v3Upload(D.receipt2,'receipt','user',account.id);
     await v3Api('/api/payments/submit',{method:'POST',body:JSON.stringify({bookingId:orderId,method:o.payment,amount:o.totals.total,tid,receiptDoc:up.id})});
     o.paymentStatus='Pending Verification';o.status='Pending Verification';o.receiptDoc=up.id;o.tid=tid;
     window.__v3Docs={};persist();closeModal();render();toast('Receipt submitted — pending admin verification');
@@ -1780,8 +1788,8 @@ function manageOrder(id){
   const o=orders.find(o=>o.id===id);
   const payRow=o.paymentStatus?`<div class="info-box"><small>Payment status</small><b>${esc(o.paymentStatus)}</b></div>`:'';
   const settle=o.status==='Completed'&&o.extraCharges?`<div class="notice">Late return: ${o.extraHours||0} extra hour(s) — charges ${money(o.extraCharges)} · Final ${money(o.finalAmount||o.totals.total)}</div>`:'';
-  modal('Reservation '+id,`<span class="pill">${o.status}</span> ${o.paymentStatus?`<span class="pill" style="margin-left:6px">${esc(o.paymentStatus)}</span>`:''}<div class="info-grid" style="margin-top:12px">${[['Renter',o.name],['Phone',o.phone],['Email',o.email],['CNIC docs',o.identityDocs?'Uploaded ('+o.identityDocs.length+')':'None'],['Destination',o.destination]].map(([k,v])=>`<div class="info-box"><small>${k}</small><b>${esc(String(v))}</b></div>`).join('')}${payRow}</div><div id="v3-order-docs" style="margin:10px 0"></div>${o.items.map((i,n)=>`<div class="panel" style="margin-bottom:15px"><h3 style="font-size:17px">${esc(carBy(i.carId).name)}</h3><p class="small muted">${date(i.start)} ${i.startTime||''} — ${date(i.end)} ${i.endTime||''} · ${esc(i.city)} · ${esc(i.service)}</p>${i.service==='With driver'?`<label>Assign chauffeur · ${esc(i.city)} branch</label><select id="v3-driver-sel-${n}" onchange="assignDriver('${id}',${n},this.value)"><option value="">Not assigned</option>${drivers.filter(d=>d.city===i.city||d.id===i.assignedDriver).map(d=>{const free=driverFree(d,i.start,i.end,id,n);return `<option value="${d.id}" ${i.assignedDriver===d.id?'selected':''} ${!free?'disabled':''}>${esc(d.name)} · ${esc(d.city)} · ${free?'Available':'Busy'}</option>`}).join('')}</select>`:''}</div>`).join('')}${priceLines(o.totals)}${settle}${o.status==='Pickup Pending'?`<div class="notice" style="background:#fffbe6;border-color:#f5e6a0;color:#7a5a00">Payment verified / cash booking — confirm the handover to start the rental.</div><div class="button-row"><button class="btn" onclick="v3Pickup('${id}')">✔ Confirm pickup — start rental</button></div>`:''}${o.status==='Active'?`<div class="panel" style="background:var(--bg-2);margin-top:10px"><label>Actual return date/time (late charges use grace ${v3Grace()} min)</label><input type="datetime-local" id="v3-return-dt" value="${v3NowLocal()}"><div class="button-row" style="margin-top:10px"><button class="btn" onclick="v3Return('${id}')">✔ Confirm return & settle</button></div></div>`:''}<div class="button-row" style="margin-top:12px">${o.status==='Confirmed'?`<button class="btn" onclick="startOrder('${id}')">Start rental</button>`:''}<button class="btn ghost" onclick="cancelOrder('${id}')">Cancel</button></div>`,true);
-  setTimeout(()=>v3LoadOrderDocs(o),60);
+  modal('Reservation '+id,`<span class="pill">${o.status}</span> ${o.paymentStatus?`<span class="pill" style="margin-left:6px">${esc(o.paymentStatus)}</span>`:''}<div class="info-grid" style="margin-top:12px">${[['Renter',o.name],['Phone',o.phone],['Email',o.email],['CNIC docs',o.identityDocs?'Uploaded ('+o.identityDocs.length+')':'None'],['Destination',o.destination]].map(([k,v])=>`<div class="info-box"><small>${k}</small><b>${esc(String(v))}</b></div>`).join('')}${payRow}</div><div id="v3-order-docs" style="margin:10px 0"></div><div id="v3-order-payment" style="margin:10px 0"></div><div id="v3-driver-payouts" style="margin:10px 0"></div>${o.items.map((i,n)=>`<div class="panel" style="margin-bottom:15px"><h3 style="font-size:17px">${esc(carBy(i.carId).name)}</h3><p class="small muted">${date(i.start)} ${i.startTime||''} — ${date(i.end)} ${i.endTime||''} · ${esc(i.city)} · ${esc(i.service)}</p>${i.service==='With driver'?`<label>Assign chauffeur · ${esc(i.city)} branch</label><select id="v3-driver-sel-${n}" onchange="assignDriver('${id}',${n},this.value)"><option value="">Not assigned</option>${drivers.filter(d=>d.city===i.city||d.id===i.assignedDriver).map(d=>{const free=driverFree(d,i.start,i.end,id,n);return `<option value="${d.id}" ${i.assignedDriver===d.id?'selected':''} ${!free?'disabled':''}>${esc(d.name)} · ${esc(d.city)} · ${free?'Available':'Busy'}</option>`}).join('')}</select>`:''}</div>`).join('')}${priceLines(o.totals)}${settle}${o.status==='Pickup Pending'?`<div class="notice" style="background:#fffbe6;border-color:#f5e6a0;color:#7a5a00">Payment verified / cash booking — confirm the handover to start the rental.</div><div class="button-row"><button class="btn" onclick="v3Pickup('${id}')">✔ Confirm pickup — start rental</button></div>`:''}${o.status==='Active'?`<div class="panel" style="background:var(--bg-2);margin-top:10px"><label>Actual return date/time (late charges use grace ${v3Grace()} min)</label><input type="datetime-local" id="v3-return-dt" value="${v3NowLocal()}"><div class="button-row" style="margin-top:10px"><button class="btn" onclick="v3Return('${id}')">✔ Confirm return & settle</button></div></div>`:''}<div class="button-row" style="margin-top:12px">${o.status==='Confirmed'?`<button class="btn" onclick="startOrder('${id}')">Start rental</button>`:''}${['Confirmed','Pending Verification','Pickup Pending'].includes(o.status)?`<button class="btn ghost" onclick="cancelOrder('${id}')">Cancel</button>`:''}</div>`,true);
+  setTimeout(()=>{v3LoadOrderDocs(o);v3LoadReservationPayment(o);v3LoadDriverPayouts(o);},60);
 }
 async function v3LoadOrderDocs(o){
   const box=document.getElementById('v3-order-docs');if(!box)return;
@@ -1789,7 +1797,7 @@ async function v3LoadOrderDocs(o){
     const docs=await v3Api('/api/documents');
     const linked=new Set([...(o.identityDocs||[]),o.receiptDoc].map(Number).filter(Number.isFinite));
     const mine=docs.filter(d=>linked.size?linked.has(Number(d.id))||d.ownerId===o.id:d.ownerId===o.userId||d.ownerId===o.id);
-    box.innerHTML=mine.length?`<div class="eyebrow" style="margin-bottom:6px">CUSTOMER DOCUMENTS (private)</div><div style="display:flex;gap:8px;flex-wrap:wrap">${mine.map(d=>`<button class="btn ghost" onclick="v3ViewDoc(${d.id})">${esc(d.kind.replace('_',' '))} ${d.status==='Verified'?'✔':d.status==='Rejected'?'✖':'⏳'}</button>`).join('')}</div>`:'';
+    box.innerHTML=mine.length?`<div class="eyebrow" style="margin-bottom:6px">CUSTOMER DOCUMENTS (private)</div><div style="display:flex;gap:8px;flex-wrap:wrap">${mine.map(d=>`<button class="btn ghost" onclick="v3ViewDoc(${d.id},'reservation','${o.id}')">${esc(d.kind.replace('_',' '))} ${d.status==='Verified'?'✔':d.status==='Rejected'?'✖':'⏳'}</button>`).join('')}</div>`:'';
   }catch(e){}
 }
 async function v3Pickup(id){
@@ -1810,22 +1818,15 @@ async function v3Return(id){
     toast(done.extraCharges>0?('Return settled — late charges '+money(done.extraCharges)):'Return settled on time');
   }catch(e){toast('Failed: '+e.message)}
 }
-async function v3ViewDoc(id){
+async function v3ViewDoc(id,contextType='',contextId=''){
+  window.__v3DocumentContext={type:contextType,id:contextId};
   try{
     const d=await v3Api('/api/documents/'+id);
     modal('Document · '+d.kind.replace('_',' '),`<img src="${d.dataUrl}" style="width:100%;border-radius:10px;border:1px solid var(--line)" alt="document"><p class="small muted" style="margin-top:8px">Status: ${esc(d.status||'Pending')} — private document, admin/owner only.</p>`+(isAdmin?`<div class="button-row"><button class="btn ghost" onclick="v3DocReview(${id},'Verified')">✔ Mark verified</button><button class="btn ghost" onclick="v3DocReview(${id},'Rejected')">✖ Mark rejected</button></div>`:''),true);
   }catch(e){toast('Cannot open document: '+e.message)}
 }
 async function v3DocReview(id,status){
-  try{await v3Api('/api/documents/'+id+'/review',{method:'POST',body:JSON.stringify({status})});closeModal();toast('Document '+status.toLowerCase());v3ShowDocs();}catch(e){toast('Failed: '+e.message)}
-}
-async function v3ShowDocs(){
-  modal('CNIC & document verification',`<div id="v3-docs-list" class="small muted">Loading…</div>`,true);
-  try{
-    const docs=await v3Api('/api/documents');
-    const box=document.getElementById('v3-docs-list');
-    box.innerHTML=docs.length?`<div class="table-scroll"><table><thead><tr><th>ID</th><th>Owner</th><th>Kind</th><th>Status</th><th></th></tr></thead><tbody>${docs.map(d=>`<tr><td>${d.id}</td><td>${esc(d.ownerType)} · ${esc(d.ownerId)}</td><td>${esc(d.kind.replace('_',' '))}</td><td><span class="pill">${esc(d.status||'Pending')}</span></td><td><button class="btn ghost" onclick="v3ViewDoc(${d.id})">View ↗</button></td></tr>`).join('')}</tbody></table></div>`:'<p>No documents uploaded yet.</p>';
-  }catch(e){document.getElementById('v3-docs-list').textContent='Server offline.'}
+  try{await v3Api('/api/documents/'+id+'/review',{method:'POST',body:JSON.stringify({status})});toast('Document '+status.toLowerCase());const ctx=window.__v3DocumentContext||{};if(ctx.type==='reservation')manageOrder(ctx.id);else if(ctx.type==='driver')editDriver(+ctx.id);else if(ctx.type==='application')reviewApplication(ctx.id);else closeModal();}catch(e){toast('Failed: '+e.message)}
 }
 
 /* ---------- reviews: customer submit + admin moderation ---------- */
@@ -1883,7 +1884,7 @@ function editFleet(id){const c=carBy(id);window.fleetEditTemp={};const allImages
 
 /* ---------- drivers: licence picture + CNIC front/back required ---------- */
 function driverForm(){window.__v3DriverDocs={};modal('Add driver — documents required',`<form onsubmit="saveDriver(event)"><div class="formgrid"><div class="field wide"><label>Full name</label><input name="name" required></div><div class="field"><label>Phone</label><input name="phone" required></div><div class="field"><label>City</label><select name="city">${cities('Lahore')}</select></div><div class="field"><label>Experience years</label><input name="experience" type="number" required></div><div class="field wide"><label>Licence number</label><input name="license" required></div><div class="field"><label>Licence picture *</label><input type="file" accept="image/*" required onchange="v3CaptureDoc(this,'license','__v3DriverDocs')"><div id="v3-pv-license" class="v3-upload-preview"></div></div><div class="field"><label>CNIC front picture *</label><input type="file" accept="image/*" required onchange="v3CaptureDoc(this,'cnicFront','__v3DriverDocs')"><div id="v3-pv-cnicFront" class="v3-upload-preview"></div></div><div class="field"><label>CNIC back picture *</label><input type="file" accept="image/*" required onchange="v3CaptureDoc(this,'cnicBack','__v3DriverDocs')"><div id="v3-pv-cnicBack" class="v3-upload-preview"></div></div></div><p class="file-note" style="margin-top:8px">Documents are stored privately — only admin can view them.</p><button class="btn full" style="margin-top:12px">Add driver ↗</button></form>`)}
-function editDriver(id){const d=drivers.find(d=>d.id===id);window.__v3DriverDocs={};modal('Edit driver — documents',`<form onsubmit="saveDriverEdit(event,${id})"><div class="formgrid"><div class="field wide"><label>Name</label><input name="name" required value="${esc(d.name)}"></div><div class="field"><label>Phone</label><input name="phone" required value="${esc(d.phone)}"></div><div class="field"><label>City</label><select name="city">${cities(d.city)}</select></div><div class="field"><label>Experience</label><input name="experience" type="number" required value="${d.experience}"></div><div class="field wide"><label>Licence number</label><input name="license" required value="${esc(d.license)}"></div><div class="field"><label>Licence picture ${d.docs?'(replace)':'*'}</label><input type="file" accept="image/*" ${d.docs?'':'required'} onchange="v3CaptureDoc(this,'license','__v3DriverDocs')"><div id="v3-pv-license" class="v3-upload-preview"></div></div><div class="field"><label>CNIC front ${d.docs?'(replace)':'*'}</label><input type="file" accept="image/*" ${d.docs?'':'required'} onchange="v3CaptureDoc(this,'cnicFront','__v3DriverDocs')"><div id="v3-pv-cnicFront" class="v3-upload-preview"></div></div><div class="field"><label>CNIC back ${d.docs?'(replace)':'*'}</label><input type="file" accept="image/*" ${d.docs?'':'required'} onchange="v3CaptureDoc(this,'cnicBack','__v3DriverDocs')"><div id="v3-pv-cnicBack" class="v3-upload-preview"></div></div></div>${d.docs?`<div class="button-row" style="margin-top:10px">${d.docs.map(x=>`<button type="button" class="btn ghost" onclick="v3ViewDoc(${x})">Doc ${x} ↗</button>`).join('')}</div>`:''}<button class="btn full" style="margin-top:12px">Save driver ↗</button></form>`)}
+function editDriver(id){const d=drivers.find(d=>d.id===id);window.__v3DriverDocs={};modal('Edit driver — documents',`<form onsubmit="saveDriverEdit(event,${id})"><div class="formgrid"><div class="field wide"><label>Name</label><input name="name" required value="${esc(d.name)}"></div><div class="field"><label>Phone</label><input name="phone" required value="${esc(d.phone)}"></div><div class="field"><label>City</label><select name="city">${cities(d.city)}</select></div><div class="field"><label>Experience</label><input name="experience" type="number" required value="${d.experience}"></div><div class="field wide"><label>Licence number</label><input name="license" required value="${esc(d.license)}"></div><div class="field"><label>Licence picture ${d.docs?'(replace)':'*'}</label><input type="file" accept="image/*" ${d.docs?'':'required'} onchange="v3CaptureDoc(this,'license','__v3DriverDocs')"><div id="v3-pv-license" class="v3-upload-preview"></div></div><div class="field"><label>CNIC front ${d.docs?'(replace)':'*'}</label><input type="file" accept="image/*" ${d.docs?'':'required'} onchange="v3CaptureDoc(this,'cnicFront','__v3DriverDocs')"><div id="v3-pv-cnicFront" class="v3-upload-preview"></div></div><div class="field"><label>CNIC back ${d.docs?'(replace)':'*'}</label><input type="file" accept="image/*" ${d.docs?'':'required'} onchange="v3CaptureDoc(this,'cnicBack','__v3DriverDocs')"><div id="v3-pv-cnicBack" class="v3-upload-preview"></div></div></div>${d.docs?`<div class="button-row" style="margin-top:10px">${d.docs.map(x=>`<button type="button" class="btn ghost" onclick="v3ViewDoc(${x},'driver','${id}')">Doc ${x} ↗</button>`).join('')}</div>`:''}<button class="btn full" style="margin-top:12px">Save driver ↗</button></form>`)}
 async function saveDriver(e){
   e.preventDefault();const f=Object.fromEntries(new FormData(e.target));
   const D=window.__v3DriverDocs||{};
@@ -1948,3 +1949,63 @@ function v3FillDynamic(){
 })();
 
 /* Admin tab is reflected in the URL hash so refresh preserves the current page. */
+
+/* ---------- contextual verification + driver payouts ---------- */
+function canCancelBooking(o){return !!o&&['Confirmed','Pending Verification','Pickup Pending'].includes(o.status)}
+async function confirmCancel(id){
+  const o=orders.find(x=>x.id===id);if(!o||!canCancelBooking(o))return toast('This booking can no longer be cancelled.');
+  if(v3Online()){
+    try{
+      const b=await v3Api('/api/bookings/'+encodeURIComponent(id)+'/cancel',{method:'POST',body:JSON.stringify({})});
+      const i=orders.findIndex(x=>x.id===id);if(i>=0)orders[i]=b;
+      // Availability is server-authoritative, but purge this tab's stale
+      // window cache before the next render/poll so Rented flips immediately.
+      if(__apexRentedIds)for(const item of (o.items||[]))__apexRentedIds.delete(Number(item.carId));
+      persist();closeModal();render();apexPollAvailability();v3RefreshBootstrap();
+      toast('Cancelled — vehicle availability refreshed immediately.');
+    }catch(err){toast(err.message||'Cancel failed');}
+    return;
+  }
+  o.status='Cancelled';if(__apexRentedIds)for(const item of (o.items||[]))__apexRentedIds.delete(Number(item.carId));
+  persist();closeModal();render();apexPollAvailability();
+}
+async function v3LoadReservationPayment(o){
+  const box=document.getElementById('v3-order-payment');if(!box)return;
+  try{
+    const all=await v3Api('/api/payments');const rows=all.filter(p=>p.bookingId===o.id);
+    box.innerHTML=`<div class="panel" style="background:var(--bg-2)"><div class="eyebrow">PAYMENT VERIFICATION</div>${rows.length?rows.map(p=>`<div class="button-row" style="justify-content:space-between;margin-top:8px"><span><b>${esc(p.status)}</b><small style="display:block">${money(p.amount)} · ${esc(p.method)} · ${esc(p.tid||'')}</small></span><span>${p.receiptDoc?`<button class="btn ghost" onclick="v3ViewDoc(${p.receiptDoc},'reservation','${o.id}')">View receipt</button>`:''} ${p.status==='Pending Verification'?`<button class="btn dark" onclick="v3ReviewPayment(${p.id},'verify')">Verify</button><button class="btn ghost" onclick="v3ReviewPayment(${p.id},'reject')">Reject</button><button class="btn ghost" onclick="v3ReviewPayment(${p.id},'reupload')">Request re-upload</button>`:''}</span></div>`).join(''):`<p class="small muted">No receipt submitted. ${esc(o.paymentStatus||'')}</p>`}</div>`;
+  }catch(e){box.innerHTML='<p class="small muted">Payment details unavailable.</p>';}
+}
+async function v3LoadDriverPayouts(o){
+  const box=document.getElementById('v3-driver-payouts');if(!box||o.status!=='Completed')return;
+  const withDriver=(o.items||[]).map((item,pos)=>({item,pos})).filter(x=>Number(x.item.assignedDriver)>0);
+  if(!withDriver.length)return;
+  try{
+    const rows=await Promise.all(withDriver.map(async ({item,pos})=>({item,pos,payout:await v3Api('/api/driver-payouts?bookingId='+encodeURIComponent(o.id)+'&bookingItemPos='+pos)})));
+    box.innerHTML=`<div class="panel" style="background:var(--bg-2)"><div class="eyebrow">DRIVER PAYOUTS</div>${rows.map(({item,pos,payout})=>{const driver=drivers.find(d=>+d.id===+item.assignedDriver);return `<div class="button-row" style="justify-content:space-between;margin-top:8px"><span><b>${esc(driver?.name||'Assigned driver')}</b><small style="display:block">Server driver charge: ${money(item.price?.driver||0)}</small></span>${payout?.id?`<span class="pill">Paid ${money(payout.amount)} · ${esc(payout.reference)}</span>`:`<button class="btn dark" onclick="v3PayDriver('${o.id}',${pos})">Pay driver</button>`}</div>`}).join('')}</div>`;
+  }catch(e){box.innerHTML='<p class="small muted">Driver payout state unavailable.</p>';}
+}
+async function v3PayDriver(bookingId,bookingItemPos){
+  const reference=prompt('Payment reference / transfer ID:');if(!reference?.trim())return;
+  const note=prompt('Optional payout note:')||'';
+  try{
+    const paid=await v3Api('/api/driver-payouts',{method:'POST',body:JSON.stringify({bookingId,bookingItemPos,reference:reference.trim(),note})});
+    toast(paid.alreadyPaid?'Driver was already paid.':'Driver paid '+money(paid.amount));
+    const o=orders.find(x=>x.id===bookingId);if(o)v3LoadDriverPayouts(o);
+    v3RefreshBootstrap();
+  }catch(e){toast('Driver payout failed: '+e.message)}
+}
+async function v3DriverPayoutAccount(driverId){
+  try{
+    const d=drivers.find(x=>+x.id===+driverId),a=await v3Api('/api/drivers/'+driverId+'/payout-account');
+    modal('Driver payout account · '+esc(d?.name||driverId),`<form onsubmit="v3SaveDriverPayoutAccount(event,${driverId})"><div class="formgrid"><div class="field"><label>Method</label><select name="method"><option ${a.method==='Bank account / IBAN'?'selected':''}>Bank account / IBAN</option><option ${a.method==='JazzCash'?'selected':''}>JazzCash</option><option ${a.method==='Easypaisa'?'selected':''}>Easypaisa</option></select></div><div class="field"><label>Account title</label><input name="accountTitle" required value="${esc(a.accountTitle||'')}"></div><div class="field"><label>Account number</label><input name="accountNumber" value="${esc(a.accountNumber||'')}"></div><div class="field"><label>IBAN</label><input name="iban" value="${esc(a.iban||'')}"></div><div class="field"><label>Wallet phone</label><input name="phone" value="${esc(a.phone||'')}"></div></div><p class="file-note">Saved encrypted with AES-GCM in PostgreSQL.</p><button class="btn full" style="margin-top:12px">Save payout account</button></form>`,true);
+  }catch(e){toast('Payout account unavailable: '+e.message)}
+}
+async function v3SaveDriverPayoutAccount(e,driverId){
+  e.preventDefault();const body=Object.fromEntries(new FormData(e.target));
+  try{await v3Api('/api/drivers/'+driverId+'/payout-account',{method:'PUT',body:JSON.stringify(body)});closeModal();toast('Driver payout account saved securely.');}
+  catch(err){toast('Could not save account: '+err.message)}
+}
+async function v3DriverPayoutHistory(driverId){
+  try{const rows=await v3Api('/api/drivers/'+driverId+'/payouts');modal('Driver payout history',rows.length?`<div class="table-scroll"><table><thead><tr><th>Booking</th><th>Amount</th><th>Method</th><th>Reference</th><th>When</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.bookingId)} · item ${p.bookingItemPos}</td><td>${money(p.amount)}</td><td>${esc(p.method)} · ••••${esc(p.accountDisplay)}</td><td>${esc(p.reference)}</td><td>${p.createdAt?new Date(p.createdAt).toLocaleString():''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="small muted">No payouts yet.</p>',true)}catch(e){toast('Payout history unavailable: '+e.message)}
+}

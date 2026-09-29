@@ -92,6 +92,7 @@ public final class FleetController {
                 if (Json.getStr(o, "id", "").isEmpty()) o.addProperty("id", nextDriverId(c));
                 Driver created = Driver.fromJson(o);
                 if (created.name.isEmpty()) throw ApiException.validation("Driver name is required");
+                validateDriverApproval(c, created);
                 app.drivers.upsert(c, created);
                 return created;
             });
@@ -107,6 +108,7 @@ public final class FleetController {
                 for (var e : ctx.body.entrySet()) o.add(e.getKey(), e.getValue());
                 o.addProperty("id", id);
                 Driver updated = Driver.fromJson(o);
+                validateDriverApproval(c, updated);
                 app.drivers.upsert(c, updated);
                 return updated;
             });
@@ -237,6 +239,26 @@ public final class FleetController {
             if (documentId > 0 && !app.documents.isFleetPhoto(c, documentId, carId, applicationId)) {
                 throw ApiException.validation(field + " is not a valid image for this car");
             }
+        }
+    }
+
+    private void validateDriverApproval(com.apex.db.PgConnection c, Driver driver) {
+        String state = driver.status == null ? "" : driver.status;
+        if (!("Approved".equalsIgnoreCase(state) || "Active".equalsIgnoreCase(state))) return;
+        if (driver.data == null || !driver.data.has("docs") || !driver.data.get("docs").isJsonArray()) return; // legacy seed
+        boolean license = false, front = false, back = false;
+        for (JsonElement el : driver.data.getAsJsonArray("docs")) {
+            long id; try { id = el.getAsLong(); } catch (RuntimeException e) { continue; }
+            var r = c.query("SELECT kind, status, owner_type, owner_id FROM documents WHERE id=$1", new String[]{String.valueOf(id)});
+            if (r.rowCount() == 0) continue;
+            String[] row = r.rows.get(0);
+            if (!"Verified".equals(row[1]) || !"driver".equals(row[2]) || !String.valueOf(driver.id).equals(row[3])) continue;
+            if ("license".equals(row[0])) license = true;
+            if ("cnic_front".equals(row[0])) front = true;
+            if ("cnic_back".equals(row[0])) back = true;
+        }
+        if (!(license && front && back)) {
+            throw ApiException.conflict("Driver approval is blocked until linked licence and both CNIC documents are verified");
         }
     }
 
