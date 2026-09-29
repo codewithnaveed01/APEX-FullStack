@@ -101,14 +101,16 @@ public final class UploadService {
         final String fName = fname;
         final byte[] fBytes = bytes;
         final String fOwnerId = ownerId;
+        final boolean verifiedFleetPhoto = isAdmin && ownerType.equals("car") && kind.equals("photo");
         return db.tx(c -> {
             long id = docs.insert(c, ownerType, fOwnerId, kind, fName, contentType, fBytes);
+            if (verifiedFleetPhoto) docs.updateStatus(c, id, "Verified");
             JsonObject o = new JsonObject();
             o.addProperty("id", id);
             o.addProperty("kind", kind);
             o.addProperty("name", fName);
             o.addProperty("bytes", bytes.length);
-            o.addProperty("status", "Pending");
+            o.addProperty("status", verifiedFleetPhoto ? "Verified" : "Pending");
             return o;
         });
     }
