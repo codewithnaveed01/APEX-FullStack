@@ -41,6 +41,9 @@ railway.json         legacy Railway config for existing services (new services: 
   history, encrypted payout accounts and the idempotent 90/10 owner payout ledger.
 - **`migrations/005_approve_seed_drivers.sql`** — marks only the exact seven built-in
   chauffeur records as approved; admin-created driver applications remain pending.
+- **`migrations/006_externalize_legacy_fleet_images.sql`** — migrates historical
+  inline/base64 fleet photos into PostgreSQL document bytes and replaces the
+  multi-megabyte public payloads with compact image references.
 
 Money is **always computed server-side** from `cars.rate` / `hourly_rate` / settings —
 client-sent prices are never trusted. Receipt upload → `Pending Verification`; only an
@@ -181,7 +184,7 @@ SELECT count(*) AS app_tables FROM information_schema.tables
 SELECT count(*) AS seeded_cars FROM public.cars;
 ```
 
-Expect migrations **`001_init.sql` through `005_approve_seed_drivers.sql`**,
+Expect migrations **`001_init.sql` through `006_externalize_legacy_fleet_images.sql`**,
 **23 app tables**, **13 seeded cars**, and **7 approved seeded drivers** on a new DB. If `schema_migrations` is
 missing/empty or fewer tables appear, inspect the
 **app's** deploy logs: the DB reference may be missing/not deployed, point to a
@@ -217,8 +220,11 @@ Uploaded document bytes are stored in PostgreSQL (`BYTEA`) as the source of
 truth; the local `backend/uploads` directory is ephemeral unless a volume is
 attached. Owner listings require exactly three ordered images (exterior,
 interior, detail/engine); approval publishes durable `/api/vehicle-images/{id}`
-references backed by those PostgreSQL bytes. Owner payout account values are
-AES-256-GCM encrypted before storage. Set a stable `APEX_PAYOUT_ENCRYPTION_KEY`
+references backed by those PostgreSQL bytes. Admin fleet photo edits use the same
+compact PostgreSQL-byte/public-reference model; API and static text responses are
+gzip-compressed, while HTML/JS/CSS use ETag revalidation so every device receives
+the current deployment without repeatedly downloading unchanged files. Owner payout
+account values are AES-256-GCM encrypted before storage. Set a stable `APEX_PAYOUT_ENCRYPTION_KEY`
 in Railway before collecting payout details. No MySQL is used.
 
 ## Configuration

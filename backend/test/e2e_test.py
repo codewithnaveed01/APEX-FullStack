@@ -52,6 +52,18 @@ s, b = req("GET", "/", raw=True)
 check("GET / serves index.html", s == 200 and b"customer.js" in b, f"{s}")
 s, b = req("GET", "/customer.js", raw=True)
 check("GET /customer.js", s == 200 and len(b) > 100000, f"{s} len={len(b) if isinstance(b, bytes) else '?'}")
+try:
+    compressed_req = urllib.request.Request(BASE + "/customer.js", headers={"Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(compressed_req, timeout=30) as compressed_resp:
+        compressed_body = compressed_resp.read()
+        static_etag = compressed_resp.headers.get("ETag")
+        check("static JavaScript is gzip-compressed for mobile clients",
+              compressed_resp.headers.get("Content-Encoding") == "gzip" and compressed_body.startswith(b"\x1f\x8b"),
+              str(compressed_resp.headers))
+        check("static assets have cache validators", bool(static_etag) and "must-revalidate" in
+              compressed_resp.headers.get("Cache-Control", ""), str(compressed_resp.headers))
+except Exception as error:
+    check("static compression/cache headers", False, str(error))
 s, b = req("GET", "/../etc/passwd", raw=True)
 check("path traversal no leak", s in (200, 404) and b"root:" not in (b if isinstance(b, bytes) else b""), f"{s}")
 s, b = req("GET", "/api/nope")
@@ -132,6 +144,33 @@ check("admin create car 201", s == 201 and b.get("name") == "Temp Car" and b.get
 temp_id = b.get("id") if s == 201 else None
 s, b = req("PUT", f"/api/fleet/{temp_id}", {"name": "Temp Car 2", "rate": 11000, "status": "Active"}, token=admin)
 check("admin update car", s == 200 and b.get("name") == "Temp Car 2", f"{s} {b}")
+fleet_data_url = "data:image/png;base64," + __import__("base64").b64encode(png_bytes()).decode()
+s, fleet_photo = req("POST", "/api/uploads", {
+    "dataUrl": fleet_data_url, "kind": "photo", "ownerType": "car", "ownerId": str(temp_id)}, admin)
+fleet_photo_id = fleet_photo.get("id") if s == 201 else None
+check("admin fleet image stored in PostgreSQL", s == 201 and fleet_photo_id, f"{s} {fleet_photo}")
+s, b = req("POST", "/api/uploads", {
+    "dataUrl": fleet_data_url, "kind": "photo", "ownerType": "car", "ownerId": str(temp_id)}, cust)
+check("customer cannot upload a generic fleet image", s == 403, f"{s} {b}")
+s, b = req("PUT", f"/api/fleet/{temp_id}", {"mainImageId": fleet_photo_id}, token=admin)
+check("admin attaches normalized fleet image", s == 200 and b.get("mainImageId") == fleet_photo_id and
+      b.get("customImage") == f"/api/vehicle-images/{fleet_photo_id}" and "data:image" not in json.dumps(b), f"{s} {b}")
+s, compacted = req("PUT", f"/api/fleet/{temp_id}", {"customImage": fleet_data_url}, token=admin)
+check("server strips historical inline image payloads from stale browsers", s == 200 and
+      compacted.get("customImage") == f"/api/vehicle-images/{fleet_photo_id}" and
+      "data:image" not in json.dumps(compacted), f"{s} {compacted}")
+s, public_fleet_photo = req("GET", f"/api/vehicle-images/{fleet_photo_id}", raw=True)
+check("normalized fleet image has durable public bytes", s == 200 and public_fleet_photo.startswith(b"\x89PNG"), f"{s}")
+s, public_fleet = req("GET", "/api/fleet")
+check("public fleet response contains no inline base64 images", s == 200 and "data:image" not in json.dumps(public_fleet), "inline image leaked")
+try:
+    gzip_req = urllib.request.Request(BASE + "/api/fleet", headers={"Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(gzip_req, timeout=30) as gzip_resp:
+        gzip_body = gzip_resp.read()
+        check("public fleet JSON is gzip-compressed", gzip_resp.headers.get("Content-Encoding") == "gzip" and
+              gzip_body.startswith(b"\x1f\x8b"), str(gzip_resp.headers))
+except Exception as error:
+    check("public fleet JSON compression", False, str(error))
 s, b = req("POST", "/api/fleet", {"name": "Nope"}, token=cust)
 check("customer create car 403", s == 403, f"{s}")
 s, b = req("GET", f"/api/fleet/{car_id}")

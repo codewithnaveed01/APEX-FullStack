@@ -43,10 +43,11 @@ public final class FleetController {
                 JsonObject d = ctx.body.deepCopy();
                 long newId = nextCarId(c);
                 d.addProperty("id", newId);
+                validateFleetImageRefs(c, newId, Json.getStr(d, "applicationId", ""), d);
                 Car created = Car.fromJson(d);
                 if (created.name.isEmpty()) throw ApiException.validation("Car name is required");
                 app.cars.upsert(c, created);
-                return created;
+                return app.cars.get(c, created.id);
             });
             HttpUtil.sendJson(ctx.ex, 201, car.toJson());
         });
@@ -60,9 +61,10 @@ public final class FleetController {
                 JsonObject d = existing.data.deepCopy();
                 for (var e : ctx.body.entrySet()) d.add(e.getKey(), e.getValue());
                 d.addProperty("id", id);
+                validateFleetImageRefs(c, id, existing.applicationId, d);
                 Car updated = Car.fromJson(d);
                 app.cars.upsert(c, updated);
-                return updated;
+                return app.cars.get(c, updated.id);
             });
             HttpUtil.sendJson(ctx.ex, 200, car.toJson());
         });
@@ -226,6 +228,16 @@ public final class FleetController {
             });
             ok(ctx);
         });
+    }
+
+    private void validateFleetImageRefs(com.apex.db.PgConnection c, long carId,
+                                        String applicationId, JsonObject data) {
+        for (String field : new String[]{"mainImageId", "interiorImageId", "detailImageId"}) {
+            long documentId = Json.getLong(data, field, 0);
+            if (documentId > 0 && !app.documents.isFleetPhoto(c, documentId, carId, applicationId)) {
+                throw ApiException.validation(field + " is not a valid image for this car");
+            }
+        }
     }
 
     private long nextCarId(com.apex.db.PgConnection c) {

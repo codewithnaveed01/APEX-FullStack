@@ -56,12 +56,41 @@ public final class StaticHandler {
         }
         String ext = extOf(file.getFileName().toString()).toLowerCase();
         String mime = MIME.getOrDefault(ext, "application/octet-stream");
-        byte[] data = Files.readAllBytes(file);
+        long size = Files.size(file);
+        long modified = Files.getLastModifiedTime(file).toMillis();
+        String etag = "\"" + Long.toHexString(size) + "-" + Long.toHexString(modified) + "\"";
         ex.getResponseHeaders().set("Content-Type", mime);
+        ex.getResponseHeaders().set("ETag", etag);
+        ex.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        boolean revalidate = ".html".equals(ext) || ".js".equals(ext) || ".css".equals(ext);
+        ex.getResponseHeaders().set("Cache-Control", revalidate
+                ? "no-cache, max-age=0, must-revalidate" : "public, max-age=604800");
+        ex.getResponseHeaders().set("Vary", "Accept-Encoding");
+        if (etag.equals(ex.getRequestHeaders().getFirst("If-None-Match"))) {
+            ex.sendResponseHeaders(304, -1);
+            ex.close();
+            return;
+        }
+        byte[] data = Files.readAllBytes(file);
+        boolean useGzip = compressible(ext) && data.length >= 1024 && HttpUtil.acceptsGzip(ex);
+        if (useGzip) {
+            data = HttpUtil.gzip(data);
+            ex.getResponseHeaders().set("Content-Encoding", "gzip");
+        }
+        if ("HEAD".equalsIgnoreCase(ex.getRequestMethod())) {
+            ex.sendResponseHeaders(200, -1);
+            ex.close();
+            return;
+        }
         ex.sendResponseHeaders(200, data.length);
         try (OutputStream os = ex.getResponseBody()) {
             os.write(data);
         }
+    }
+
+    private static boolean compressible(String ext) {
+        return ".html".equals(ext) || ".css".equals(ext) || ".js".equals(ext) ||
+                ".json".equals(ext) || ".svg".equals(ext) || ".txt".equals(ext);
     }
 
     private static String extOf(String name) {

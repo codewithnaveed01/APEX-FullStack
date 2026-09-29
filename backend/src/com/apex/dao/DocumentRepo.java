@@ -10,8 +10,9 @@ import java.util.List;
 
 /**
  * Sensitive uploads (CNIC, licences, receipts, photos).
- * Bytes live in BYTEA (Postgres) and on disk; they are only ever
- * returned to the owner or an admin, never through public URLs.
+ * Bytes live in BYTEA (Postgres) and on disk. Documents stay private except
+ * vehicle photos currently referenced by a live fleet row, which have a
+ * narrowly scoped public byte endpoint.
  */
 public final class DocumentRepo {
 
@@ -80,13 +81,24 @@ public final class DocumentRepo {
         return r.rowCount() > 0;
     }
 
-    /** Public bytes are exposed only after this exact image is linked to a live owner car. */
+    /** A generic fleet image must be an admin upload for this car or an existing owner-application image. */
+    public boolean isFleetPhoto(PgConnection c, long documentId, long carId, String applicationId) {
+        QueryResult r = c.query("SELECT 1 FROM documents d WHERE d.id=$1 AND d.kind='photo' AND (" +
+                " (d.owner_type='car' AND d.owner_id=$2) OR EXISTS (SELECT 1 FROM vehicle_application_images vi" +
+                " WHERE vi.document_id=d.id AND vi.application_id=$3)) LIMIT 1",
+                new String[]{String.valueOf(documentId), String.valueOf(carId),
+                        applicationId == null ? "" : applicationId});
+        return r.rowCount() > 0;
+    }
+
+    /** Public bytes are exposed only while this exact document is referenced by a live fleet row. */
     public JsonObject publicVehicleImage(PgConnection c, long id) {
         QueryResult r = c.query("SELECT d.content_type, d.content FROM documents d" +
-                " JOIN vehicle_application_images vi ON vi.document_id = d.id" +
-                " JOIN cars ca ON ca.application_id = vi.application_id" +
-                " JOIN owner_applications a ON a.id = vi.application_id" +
-                " WHERE d.id = $1 AND ca.status <> 'Deleted' AND a.deleted_at IS NULL LIMIT 1",
+                " JOIN cars ca ON d.id IN (ca.main_image_id, ca.interior_image_id, ca.detail_image_id)" +
+                " WHERE d.id = $1 AND ca.status <> 'Deleted' AND (" +
+                " (d.owner_type='car' AND d.owner_id=ca.id::text) OR EXISTS (" +
+                " SELECT 1 FROM vehicle_application_images vi WHERE vi.document_id=d.id" +
+                " AND vi.application_id=ca.application_id)) LIMIT 1",
                 new String[]{String.valueOf(id)});
         if (r.rowCount() == 0) return null;
         JsonObject out = new JsonObject();

@@ -6,7 +6,9 @@ import com.apex.db.QueryResult;
 import com.apex.model.Car;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public final class CarRepo {
     private final Database db;
@@ -76,9 +78,12 @@ public final class CarRepo {
      * by a stale browser after an owner deletion.
      */
     public void replaceAll(PgConnection c, List<Car> incoming) {
-        c.simpleQuery("DELETE FROM cars WHERE application_id IS NULL");
-        for (Car car : incoming) {
+        List<Car> before = list(c);
+        Set<Long> regularIds = new HashSet<>();
+        for (Car original : incoming) {
+            Car car = preservePersistedImages(original, get(c, original.id));
             if (car.applicationId == null || car.applicationId.isBlank()) {
+                regularIds.add(car.id);
                 upsert(c, car);
                 continue;
             }
@@ -87,6 +92,31 @@ public final class CarRepo {
                     new String[]{car.applicationId});
             if (live.rowCount() > 0) upsert(c, car);
         }
+        // Preserve normal admin deletion semantics without deleting rows first;
+        // deleting first used to discard normalized PostgreSQL image references.
+        for (Car existing : before) {
+            if ((existing.applicationId == null || existing.applicationId.isBlank()) &&
+                    !regularIds.contains(existing.id)) delete(c, existing.id);
+        }
+    }
+
+    private static Car preservePersistedImages(Car incoming, Car existing) {
+        if (existing == null) return incoming;
+        com.google.gson.JsonObject data = incoming.data.deepCopy();
+        if (existing.applicationId != null && !existing.applicationId.isBlank()) {
+            data.addProperty("applicationId", existing.applicationId);
+            if (existing.ownerId != null && !existing.ownerId.isBlank()) data.addProperty("ownerId", existing.ownerId);
+        }
+        if (incoming.mainImageId <= 0 && existing.mainImageId > 0) {
+            data.addProperty("mainImageId", existing.mainImageId);
+        }
+        if (incoming.interiorImageId <= 0 && existing.interiorImageId > 0) {
+            data.addProperty("interiorImageId", existing.interiorImageId);
+        }
+        if (incoming.detailImageId <= 0 && existing.detailImageId > 0) {
+            data.addProperty("detailImageId", existing.detailImageId);
+        }
+        return Car.fromJson(data);
     }
 
     public void delete(PgConnection c, long id) {

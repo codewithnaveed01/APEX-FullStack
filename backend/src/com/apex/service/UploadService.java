@@ -20,14 +20,15 @@ import java.util.Set;
  * - image types only, validated by magic bytes (not just the header)
  * - hard 2.5 MB cap
  * - stored in Postgres (BYTEA) and mirrored to disk
- * - readable by the owner or an admin only; no public URLs
+ * - private by default; only photo documents referenced by a live fleet row are
+ *   exposed through the dedicated public vehicle-image endpoint
  */
 public final class UploadService {
 
     public static final long MAX_BYTES = 2_500_000L;
     public static final int MAX_B64_CHARS = 3_500_000;
     private static final Set<String> KINDS = Set.of("cnic_front", "cnic_back", "license", "receipt", "photo", "doc");
-    private static final Set<String> OWNER_TYPES = Set.of("user", "driver", "booking");
+    private static final Set<String> OWNER_TYPES = Set.of("user", "driver", "booking", "car");
 
     private final Database db;
     private final DocumentRepo docs;
@@ -54,6 +55,9 @@ public final class UploadService {
         if (ownerId.isEmpty()) {
             if (isAdmin) throw ApiException.validation("Missing ownerId");
             ownerId = Json.getStr(session, "userId", "");
+        }
+        if (ownerType.equals("car") && !isAdmin) {
+            throw ApiException.forbidden("Only an admin can upload generic fleet images");
         }
         if (ownerType.equals("user") && !isAdmin && !ownerId.equals(Json.getStr(session, "userId", ""))) {
             ownerId = Json.getStr(session, "userId", ""); // never trust the client

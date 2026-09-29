@@ -1,7 +1,12 @@
 package com.apex.model;
 
 import com.apex.util.Json;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /** A car in the fleet. `data` is the exact frontend shape (round-trips). */
 public final class Car {
@@ -36,6 +41,7 @@ public final class Car {
     public static Car fromJson(JsonObject j) {
         if (j == null) return null;
         JsonObject d = j.deepCopy();
+        stripInlineImages(d);
         String id = d.has("id") ? Json.clean(d.get("id").getAsString()) : "";
         return new Car(id,
                 Json.getStr(d, "name", ""), Json.getStr(d, "brand", ""),
@@ -62,19 +68,67 @@ public final class Car {
         d.addProperty("id", Long.parseLong(qr.col("id", row)));
         put(d, "ownerId", qr.col("owner_id", row));
         put(d, "applicationId", qr.col("application_id", row));
-        putNumber(d, "mainImageId", qr.col("main_image_id", row));
-        putNumber(d, "interiorImageId", qr.col("interior_image_id", row));
-        putNumber(d, "detailImageId", qr.col("detail_image_id", row));
+        long main = putNumber(d, "mainImageId", qr.col("main_image_id", row));
+        long interior = putNumber(d, "interiorImageId", qr.col("interior_image_id", row));
+        long detail = putNumber(d, "detailImageId", qr.col("detail_image_id", row));
+        applyImageReferences(d, main, interior, detail);
         return fromJson(d);
+    }
+
+    /** Never let historical base64 image payloads inflate public JSON responses. */
+    private static void stripInlineImages(JsonObject d) {
+        if (inline(d.get("customImage"))) d.remove("customImage");
+        JsonObject custom = d.has("customImages") && d.get("customImages").isJsonObject()
+                ? d.getAsJsonObject("customImages") : null;
+        if (custom != null) {
+            List<String> remove = new ArrayList<>();
+            for (var entry : custom.entrySet()) if (inline(entry.getValue())) remove.add(entry.getKey());
+            for (String key : remove) custom.remove(key);
+            if (custom.size() == 0) d.remove("customImages");
+        }
+        if (d.has("images") && d.get("images").isJsonArray()) {
+            JsonArray compact = new JsonArray();
+            for (JsonElement value : d.getAsJsonArray("images")) if (!inline(value)) compact.add(value.deepCopy());
+            if (compact.size() == 0) d.remove("images"); else d.add("images", compact);
+        }
+    }
+
+    private static boolean inline(JsonElement value) {
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+                && value.getAsString().startsWith("data:image/");
+    }
+
+    private static void applyImageReferences(JsonObject d, long main, long interior, long detail) {
+        if (main > 0 && interior > 0 && detail > 0) {
+            JsonArray images = new JsonArray();
+            images.add("/api/vehicle-images/" + main);
+            images.add("/api/vehicle-images/" + interior);
+            images.add("/api/vehicle-images/" + detail);
+            d.add("images", images);
+        }
+        if (main > 0) d.addProperty("customImage", "/api/vehicle-images/" + main);
+        String imageKey = Json.getStr(d, "image", "");
+        JsonObject custom = new JsonObject();
+        if (interior > 0) custom.addProperty(imageKey + "-interior", "/api/vehicle-images/" + interior);
+        if (detail > 0) {
+            custom.addProperty(imageKey + "-detail", "/api/vehicle-images/" + detail);
+            custom.addProperty(imageKey + "-engine", "/api/vehicle-images/" + detail);
+        }
+        if (custom.size() > 0) d.add("customImages", custom);
     }
 
     private static void put(JsonObject d, String key, String value) {
         if (value != null && !value.isBlank()) d.addProperty(key, value);
     }
-    private static void putNumber(JsonObject d, String key, String value) {
+    private static long putNumber(JsonObject d, String key, String value) {
         if (value != null && !value.isBlank()) {
-            try { d.addProperty(key, Long.parseLong(value)); } catch (NumberFormatException ignored) { }
+            try {
+                long parsed = Long.parseLong(value);
+                d.addProperty(key, parsed);
+                return parsed;
+            } catch (NumberFormatException ignored) { }
         }
+        return 0;
     }
     private static JsonObject safeParse(String s) {
         try { return com.google.gson.JsonParser.parseString(s).getAsJsonObject(); }
